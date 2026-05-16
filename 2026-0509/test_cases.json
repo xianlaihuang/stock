@@ -1,0 +1,1110 @@
+{
+  "project": "股票分析软件",
+  "version": "2.0",
+  "create_date": "2026-05-09",
+  "author": "测试工程师",
+  "test_cases": [
+    {
+      "module": "抓取数据功能",
+      "cases": [
+        {
+          "id": "TC-SCRAP-001",
+          "module": "抓取数据功能",
+          "sub_module": "手动抓取",
+          "title": "点击抓取数据按钮成功获取股票行情和财务数据",
+          "priority": "高",
+          "pre_condition": "已添加股票且股票列表中有该股票，后端服务正常运行",
+          "steps": [
+            { "step_no": 1, "action": "选择左侧股票列表中的某只股票", "expected_result": "右侧显示股票详情页面，包含K线图、财务数据等tab" },
+            { "step_no": 2, "action": "点击「抓取数据」按钮", "expected_result": "按钮文字变为「正在抓取...」，按钮变为禁用状态" },
+            { "step_no": 3, "action": "等待抓取完成", "expected_result": "按钮恢复为「抓取数据」，页面弹出成功提示（含新增K线和财务数据条数），K线图和财务数据更新显示" }
+          ],
+          "expected_result": "抓取数据按钮可正常触发数据抓取，抓取过程中按钮禁用，完成后恢复并更新页面数据",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-SCRAP-002",
+          "module": "抓取数据功能",
+          "sub_module": "手动抓取",
+          "title": "抓取数据时按钮禁用防止重复点击",
+          "priority": "高",
+          "pre_condition": "已选择一只股票，后端服务正常运行",
+          "steps": [
+            { "step_no": 1, "action": "点击「抓取数据」按钮", "expected_result": "按钮文字变为「正在抓取...」，按钮变为禁用状态" },
+            { "step_no": 2, "action": "再次点击该按钮", "expected_result": "按钮无响应，不会触发第二次抓取请求" }
+          ],
+          "expected_result": "抓取过程中按钮禁用，防止重复提交",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-SCRAP-003",
+          "module": "抓取数据功能",
+          "sub_module": "手动抓取",
+          "title": "抓取失败时显示错误提示",
+          "priority": "中",
+          "pre_condition": "已选择一只股票，后端服务异常或网络异常",
+          "steps": [
+            { "step_no": 1, "action": "点击「抓取数据」按钮", "expected_result": "页面弹出错误提示信息" },
+            { "step_no": 2, "action": "观察按钮状态", "expected_result": "按钮恢复为「抓取数据」，可再次点击" }
+          ],
+          "expected_result": "抓取失败时显示错误提示，按钮恢复正常状态",
+          "actual_result": "",
+          "status": ""
+        }
+      ]
+    },
+    {
+      "module": "多数据源降级策略",
+      "cases": [
+        {
+          "id": "TC-BAK-001",
+          "module": "多数据源降级策略",
+          "sub_module": "K线数据降级",
+          "title": "东方财富K线获取失败时自动降级到新浪",
+          "priority": "高",
+          "pre_condition": "后端服务正常运行，东方财富API不可用",
+          "steps": [
+            { "step_no": 1, "action": "触发抓取数据", "expected_result": "后端日志显示东方财富获取失败，自动尝试新浪数据源" },
+            { "step_no": 2, "action": "等待抓取完成", "expected_result": "K线数据成功获取并展示，数据来源为新浪" }
+          ],
+          "expected_result": "东方财富失败后自动降级到新浪，数据正常展示",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-BAK-002",
+          "module": "多数据源降级策略",
+          "sub_module": "K线数据降级",
+          "title": "东方财富和新浪均失败时降级到腾讯",
+          "priority": "高",
+          "pre_condition": "后端服务正常运行，东方财富和新浪API均不可用",
+          "steps": [
+            { "step_no": 1, "action": "触发抓取数据", "expected_result": "后端日志显示东方财富和新浪均失败，自动尝试腾讯数据源" },
+            { "step_no": 2, "action": "等待抓取完成", "expected_result": "K线数据成功获取并展示，数据来源为腾讯" }
+          ],
+          "expected_result": "三个数据源依次降级，最终从腾讯获取数据成功",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-BAK-003",
+          "module": "多数据源降级策略",
+          "sub_module": "财务数据降级",
+          "title": "东方财富财务数据获取失败时降级到腾讯",
+          "priority": "中",
+          "pre_condition": "后端服务正常运行，东方财富财务API不可用",
+          "steps": [
+            { "step_no": 1, "action": "触发抓取数据", "expected_result": "后端日志显示东方财富财务数据获取失败，自动尝试腾讯" },
+            { "step_no": 2, "action": "等待抓取完成", "expected_result": "财务数据成功获取并展示" }
+          ],
+          "expected_result": "财务数据源降级策略正常工作",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-BAK-004",
+          "module": "多数据源降级策略",
+          "sub_module": "全部降级失败",
+          "title": "所有数据源均失败时返回空数据并提示",
+          "priority": "中",
+          "pre_condition": "后端服务正常运行，所有数据源API均不可用",
+          "steps": [
+            { "step_no": 1, "action": "触发抓取数据", "expected_result": "抓取完成，提示暂无新数据" },
+            { "step_no": 2, "action": "查看页面K线图", "expected_result": "K线图显示为空或提示数据为空" }
+          ],
+          "expected_result": "所有数据源失败时不会报错，返回空数据并友好提示",
+          "actual_result": "",
+          "status": ""
+        }
+      ]
+    },
+    {
+      "module": "添加股票功能",
+      "cases": [
+        {
+          "id": "TC-ADD-001",
+          "module": "添加股票功能",
+          "sub_module": "首次添加",
+          "title": "添加股票后不自动抓取数据，提示用户手动抓取",
+          "priority": "高",
+          "pre_condition": "后端服务正常运行，股票代码有效",
+          "steps": [
+            { "step_no": 1, "action": "在输入框输入股票代码如600519，点击添加", "expected_result": "页面弹出提示：股票添加成功，请点击「抓取数据」按钮获取行情数据" },
+            { "step_no": 2, "action": "查看K线图区域", "expected_result": "K线图显示为空，提示请先抓取数据" },
+            { "step_no": 3, "action": "查看财务数据tab", "expected_result": "财务数据显示为空，提示请先抓取数据" }
+          ],
+          "expected_result": "添加股票后不自动抓取，需用户手动点击抓取数据按钮",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-ADD-002",
+          "module": "添加股票功能",
+          "sub_module": "重复添加",
+          "title": "重复添加已存在的股票时提示已存在",
+          "priority": "中",
+          "pre_condition": "股票列表中已存在该股票",
+          "steps": [
+            { "step_no": 1, "action": "输入已存在的股票代码，点击添加", "expected_result": "页面弹出错误提示：Stock already exists" }
+          ],
+          "expected_result": "重复添加时返回409错误，提示股票已存在",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-ADD-003",
+          "module": "添加股票功能",
+          "sub_module": "空代码校验",
+          "title": "输入空股票代码时提示错误",
+          "priority": "中",
+          "pre_condition": "后端服务正常运行",
+          "steps": [
+            { "step_no": 1, "action": "不输入任何内容，点击添加", "expected_result": "页面弹出错误提示：请输入股票代码" }
+          ],
+          "expected_result": "空代码校验正常，不会发送无效请求",
+          "actual_result": "",
+          "status": ""
+        }
+      ]
+    },
+    {
+      "module": "删除股票功能",
+      "cases": [
+        {
+          "id": "TC-DEL-001",
+          "module": "删除股票功能",
+          "sub_module": "数据清理",
+          "title": "删除股票时数据库中K线和财务数据全部清理",
+          "priority": "高",
+          "pre_condition": "已选择一只股票且有K线和财务数据",
+          "steps": [
+            { "step_no": 1, "action": "点击「删除股票」按钮", "expected_result": "弹出确认对话框" },
+            { "step_no": 2, "action": "点击确认", "expected_result": "页面弹出删除成功提示" },
+            { "step_no": 3, "action": "通过API查询该股票的K线和财务数据", "expected_result": "返回数据为空" }
+          ],
+          "expected_result": "删除股票后数据库中所有相关数据被清理干净",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-DEL-002",
+          "module": "删除股票功能",
+          "sub_module": "页面缓存清理",
+          "title": "删除股票时前端缓存全部清理",
+          "priority": "高",
+          "pre_condition": "已选择一只股票，页面有缓存数据",
+          "steps": [
+            { "step_no": 1, "action": "点击「删除股票」按钮并确认", "expected_result": "删除成功，页面回到空状态" },
+            { "step_no": 2, "action": "重新添加同一只股票", "expected_result": "K线图显示为空，不会显示旧的缓存数据" }
+          ],
+          "expected_result": "删除股票后前端klineCache和financialCache中该股票的缓存全部清理",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-DEL-003",
+          "module": "删除股票功能",
+          "sub_module": "定时器清理",
+          "title": "删除股票时自动刷新定时器停止",
+          "priority": "中",
+          "pre_condition": "已选择一只股票，盘中自动刷新正在运行",
+          "steps": [
+            { "step_no": 1, "action": "点击「删除股票」按钮并确认", "expected_result": "自动刷新定时器停止，不再发送API请求" }
+          ],
+          "expected_result": "删除股票后stopAutoRefresh被调用，不再有后台请求",
+          "actual_result": "",
+          "status": ""
+        }
+      ]
+    },
+    {
+      "module": "分时线数据展示",
+      "cases": [
+        {
+          "id": "TC-MIN-001",
+          "module": "分时线数据展示",
+          "sub_module": "当日数据",
+          "title": "分时线显示最近交易日的折线图数据",
+          "priority": "高",
+          "pre_condition": "已选择一只股票并抓取了分时线数据",
+          "steps": [
+            { "step_no": 1, "action": "点击「分时线」按钮", "expected_result": "K线图区域切换为折线图，显示最近交易日的分时线数据" },
+            { "step_no": 2, "action": "查看图表类型", "expected_result": "显示为平滑折线图，带面积填充，非K线蜡烛图" },
+            { "step_no": 3, "action": "查看数据时间范围", "expected_result": "数据从9:31到15:00，共约240条分钟数据" }
+          ],
+          "expected_result": "分时线以折线图形式展示最近交易日的分钟级行情数据",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-MIN-002",
+          "module": "分时线数据展示",
+          "sub_module": "非交易日显示",
+          "title": "非交易日（如周六）分时线显示上一交易日（如周五）数据",
+          "priority": "高",
+          "pre_condition": "当前为非交易日（周六/周日），已抓取上一交易日分时线数据",
+          "steps": [
+            { "step_no": 1, "action": "点击「分时线」按钮", "expected_result": "显示上一交易日（周五）的分时线数据" },
+            { "step_no": 2, "action": "查看数据日期", "expected_result": "数据日期为上一个交易日，不是当天日期" }
+          ],
+          "expected_result": "非交易日自动显示最近一个交易日的分时线数据",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-MIN-003",
+          "module": "分时线数据展示",
+          "sub_module": "时区处理",
+          "title": "分时线日期过滤正确处理本地时区",
+          "priority": "高",
+          "pre_condition": "系统时区为UTC+8，已抓取分时线数据",
+          "steps": [
+            { "step_no": 1, "action": "点击「分时线」按钮", "expected_result": "正确显示最近交易日的分时线数据，日期与本地时间一致" },
+            { "step_no": 2, "action": "检查getLastTradingDate返回值", "expected_result": "返回的日期字符串使用本地时间格式化，不受toISOString()的UTC偏移影响" }
+          ],
+          "expected_result": "使用formatLocalDate替代toISOString，日期过滤不受时区偏移影响",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-MIN-004",
+          "module": "分时线数据展示",
+          "sub_module": "数据降级",
+          "title": "最近交易日无分时数据时显示数据中最新日期的数据",
+          "priority": "中",
+          "pre_condition": "数据库中没有最近交易日的分时线数据，但有更早日期的数据",
+          "steps": [
+            { "step_no": 1, "action": "点击「分时线」按钮", "expected_result": "显示数据中最新日期的分时线数据，而非显示为空" }
+          ],
+          "expected_result": "当最近交易日无数据时，自动降级显示数据中最新日期的分时线",
+          "actual_result": "",
+          "status": ""
+        }
+      ]
+    },
+    {
+      "module": "日线双击查看分时线",
+      "cases": [
+        {
+          "id": "TC-DBL-001",
+          "module": "日线双击查看分时线",
+          "sub_module": "弹窗显示",
+          "title": "双击日线K线图某天弹出该天分时线弹窗",
+          "priority": "高",
+          "pre_condition": "已选择一只股票，当前显示日线K线图，该天有分时线数据",
+          "steps": [
+            { "step_no": 1, "action": "在日线K线图上双击某一天的K线", "expected_result": "弹出模态框，标题显示股票名称、代码和日期" },
+            { "step_no": 2, "action": "查看弹窗内容", "expected_result": "弹窗中显示该天的分时线折线图，含价格和成交量" },
+            { "step_no": 3, "action": "查看弹窗标题", "expected_result": "标题格式为：股票名称(代码) 日期 分时线" }
+          ],
+          "expected_result": "双击日线K线可弹窗查看当天分时线数据",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-DBL-002",
+          "module": "日线双击查看分时线",
+          "sub_module": "无数据提示",
+          "title": "双击某天无分时线数据时显示提示",
+          "priority": "中",
+          "pre_condition": "已选择一只股票，当前显示日线K线图，双击的那天无分时线数据",
+          "steps": [
+            { "step_no": 1, "action": "双击一个没有分时线数据的日期", "expected_result": "弹出模态框，显示「该日无分时线数据」提示" }
+          ],
+          "expected_result": "无数据时友好提示而非报错",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-DBL-003",
+          "module": "日线双击查看分时线",
+          "sub_module": "关闭弹窗",
+          "title": "点击关闭按钮或点击遮罩层关闭分时线弹窗",
+          "priority": "中",
+          "pre_condition": "分时线弹窗已打开",
+          "steps": [
+            { "step_no": 1, "action": "点击弹窗右上角关闭按钮", "expected_result": "弹窗关闭，ECharts实例被销毁" },
+            { "step_no": 2, "action": "重新双击打开弹窗，点击弹窗外部遮罩层", "expected_result": "弹窗关闭" }
+          ],
+          "expected_result": "弹窗可通过关闭按钮和遮罩层两种方式关闭",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-DBL-004",
+          "module": "日线双击查看分时线",
+          "sub_module": "分时线模式不触发",
+          "title": "分时线模式下双击不触发弹窗",
+          "priority": "中",
+          "pre_condition": "当前显示分时线折线图",
+          "steps": [
+            { "step_no": 1, "action": "在分时线折线图上双击", "expected_result": "不弹出分时线弹窗" }
+          ],
+          "expected_result": "仅在日线/周线/月线/年线模式下双击才弹窗，分时线模式不触发",
+          "actual_result": "",
+          "status": ""
+        }
+      ]
+    },
+    {
+      "module": "K线刷新策略",
+      "cases": [
+        {
+          "id": "TC-REF-001",
+          "module": "K线刷新策略",
+          "sub_module": "非开盘不刷新",
+          "title": "15点后或9:15前或非交易日切换tab页时不刷新数据",
+          "priority": "高",
+          "pre_condition": "当前时间在非交易时段（15点后、9:15前或周末），页面有缓存数据",
+          "steps": [
+            { "step_no": 1, "action": "在日线模式下查看K线图", "expected_result": "K线图正常显示" },
+            { "step_no": 2, "action": "切换到周线模式", "expected_result": "直接使用缓存数据渲染，不发送新的API请求" },
+            { "step_no": 3, "action": "切换回日线模式", "expected_result": "直接使用缓存数据渲染，不发送新的API请求" }
+          ],
+          "expected_result": "非交易时段切换周期tab使用缓存，不发送API请求",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-REF-002",
+          "module": "K线刷新策略",
+          "sub_module": "盘中5秒刷新",
+          "title": "交易时间切换tab页时5秒自动刷新获取最新数据",
+          "priority": "高",
+          "pre_condition": "当前为交易时间（9:15-15:00工作日），已选择一只股票",
+          "steps": [
+            { "step_no": 1, "action": "在日线模式下观察网络请求", "expected_result": "每5秒自动发送一次K线数据请求" },
+            { "step_no": 2, "action": "等待30秒观察刷新次数", "expected_result": "大约发送6次刷新请求" }
+          ],
+          "expected_result": "交易时间日线/周线/月线/年线模式每5秒自动刷新",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-REF-003",
+          "module": "K线刷新策略",
+          "sub_module": "分时线盘中刷新",
+          "title": "分时线在盘中5秒自动刷新获取最新数据",
+          "priority": "高",
+          "pre_condition": "当前为交易时间，已选择一只股票，显示分时线",
+          "steps": [
+            { "step_no": 1, "action": "切换到分时线模式", "expected_result": "分时线折线图正常显示" },
+            { "step_no": 2, "action": "观察网络请求", "expected_result": "每5秒自动发送一次分时线数据请求" },
+            { "step_no": 3, "action": "观察页面是否有卡顿", "expected_result": "刷新过程无感知，页面不卡顿" }
+          ],
+          "expected_result": "分时线盘中5秒自动刷新，性能流畅无卡顿",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-REF-004",
+          "module": "K线刷新策略",
+          "sub_module": "防重入",
+          "title": "自动刷新时防止重入，上一次未完成不触发下一次",
+          "priority": "高",
+          "pre_condition": "当前为交易时间，自动刷新正在运行",
+          "steps": [
+            { "step_no": 1, "action": "模拟网络延迟较长的场景", "expected_result": "isRefreshing标志位为true时不会触发新的刷新请求" },
+            { "step_no": 2, "action": "等待上一次刷新完成", "expected_result": "isRefreshing标志位恢复为false，下一次定时器正常触发" }
+          ],
+          "expected_result": "isRefreshing防重入机制正常工作，不会出现并发请求",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-REF-005",
+          "module": "K线刷新策略",
+          "sub_module": "性能优化",
+          "title": "自动刷新使用animation:false和Silent模式避免卡顿",
+          "priority": "高",
+          "pre_condition": "当前为交易时间，自动刷新正在运行",
+          "steps": [
+            { "step_no": 1, "action": "观察K线图刷新时的渲染效果", "expected_result": "图表直接更新数据，无动画过渡，刷新瞬间完成" },
+            { "step_no": 2, "action": "观察页面交互响应", "expected_result": "刷新过程中鼠标悬停tooltip等交互正常，无卡顿" }
+          ],
+          "expected_result": "ECharts使用animation:false，Silent刷新不干扰用户交互",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-REF-006",
+          "module": "K线刷新策略",
+          "sub_module": "实时指示灯",
+          "title": "盘中实时指示灯绿色闪烁，非交易时间灰色",
+          "priority": "低",
+          "pre_condition": "已选择一只股票",
+          "steps": [
+            { "step_no": 1, "action": "交易时间观察股票名称旁的指示灯", "expected_result": "指示灯为绿色，有脉冲动画" },
+            { "step_no": 2, "action": "非交易时间观察指示灯", "expected_result": "指示灯为灰色，无动画" }
+          ],
+          "expected_result": "实时指示灯正确反映当前是否在交易时间",
+          "actual_result": "",
+          "status": ""
+        }
+      ]
+    },
+    {
+      "module": "财务数据展示",
+      "cases": [
+        {
+          "id": "TC-FIN-001",
+          "module": "财务数据展示",
+          "sub_module": "数据完整性",
+          "title": "财务数据展示最近三年的年报和季报数据",
+          "priority": "高",
+          "pre_condition": "已选择一只股票并成功抓取数据",
+          "steps": [
+            { "step_no": 1, "action": "点击「财务数据」tab", "expected_result": "显示Excel表格形式的财务数据" },
+            { "step_no": 2, "action": "查看表头列数", "expected_result": "表头显示多个报告期（年报+季报），覆盖最近约3年" },
+            { "step_no": 3, "action": "查看报告类型", "expected_result": "包含年报、一季报、中报、三季报等不同类型" }
+          ],
+          "expected_result": "财务数据以表格形式展示最近三年的年报和季报",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-FIN-002",
+          "module": "财务数据展示",
+          "sub_module": "指标展示",
+          "title": "财务数据表格展示每股指标、盈利能力、成长能力、偿债能力等指标",
+          "priority": "高",
+          "pre_condition": "已选择一只股票并成功抓取数据",
+          "steps": [
+            { "step_no": 1, "action": "点击「财务数据」tab", "expected_result": "表格按分区显示不同类别的指标" },
+            { "step_no": 2, "action": "查看每股指标分区", "expected_result": "包含基本每股收益、每股净资产、每股经营现金流、每股资本公积、每股未分配利润" },
+            { "step_no": 3, "action": "查看盈利能力分区", "expected_result": "包含营业总收入、毛利润、归母净利润、扣非净利润、销售毛利率、ROE、总资产净利率" },
+            { "step_no": 4, "action": "查看成长能力分区", "expected_result": "包含营收同比增长、净利润同比增长、扣非净利润同比增长、营收环比增长、净利润环比增长" },
+            { "step_no": 5, "action": "查看偿债能力分区", "expected_result": "包含资产负债率、流动比率、速动比率" }
+          ],
+          "expected_result": "财务数据表格分5个分区展示完整的财务指标",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-FIN-003",
+          "module": "财务数据展示",
+          "sub_module": "数据对比",
+          "title": "财务数据表格支持多期对比，红绿色区分正负值",
+          "priority": "高",
+          "pre_condition": "已选择一只股票并成功抓取数据",
+          "steps": [
+            { "step_no": 1, "action": "查看财务数据表格", "expected_result": "每行一个指标，每列一个报告期，可横向对比不同期间数据" },
+            { "step_no": 2, "action": "查看正数值的颜色", "expected_result": "正数值显示为红色（val-positive）" },
+            { "step_no": 3, "action": "查看负数值的颜色", "expected_result": "负数值显示为绿色（val-negative）" },
+            { "step_no": 4, "action": "查看大数值的格式化", "expected_result": "亿元级数据显示为X.XX亿，万元级数据显示为X.XX万" }
+          ],
+          "expected_result": "表格支持多期对比，正负值用红绿色区分，大数值自动格式化",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-FIN-004",
+          "module": "财务数据展示",
+          "sub_module": "筛选功能",
+          "title": "财务数据支持全部/年报/季报筛选",
+          "priority": "中",
+          "pre_condition": "已选择一只股票并成功抓取数据",
+          "steps": [
+            { "step_no": 1, "action": "点击「年报」筛选按钮", "expected_result": "表格只显示年报数据列" },
+            { "step_no": 2, "action": "点击「季报」筛选按钮", "expected_result": "表格只显示季报数据列（一季报/中报/三季报）" },
+            { "step_no": 3, "action": "点击「全部」筛选按钮", "expected_result": "表格恢复显示所有报告期数据" }
+          ],
+          "expected_result": "筛选按钮正常切换显示不同类型的财务报告",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-FIN-005",
+          "module": "财务数据展示",
+          "sub_module": "空数据提示",
+          "title": "未抓取数据时财务数据tab显示提示",
+          "priority": "中",
+          "pre_condition": "已选择一只股票但未抓取数据",
+          "steps": [
+            { "step_no": 1, "action": "点击「财务数据」tab", "expected_result": "显示「暂无财务数据，请先抓取数据」提示" }
+          ],
+          "expected_result": "无数据时友好提示用户先抓取数据",
+          "actual_result": "",
+          "status": ""
+        }
+      ]
+    },
+    {
+      "module": "买入信号引擎",
+      "cases": [
+        {
+          "id": "TC-SIG-001",
+          "module": "买入信号引擎",
+          "sub_module": "生成买入公式",
+          "title": "点击「生成买入公式」按钮成功为选中股票生成规则",
+          "priority": "高",
+          "pre_condition": "已选择一只股票且该股票有至少30条日线数据，后端服务正常运行",
+          "steps": [
+            { "step_no": 1, "action": "切换到「智能分析」tab页", "expected_result": "显示「生成买入公式」和「运行分析」按钮" },
+            { "step_no": 2, "action": "点击「生成买入公式」按钮", "expected_result": "按钮变为「生成中...」并禁用" },
+            { "step_no": 3, "action": "等待生成完成", "expected_result": "弹出成功提示「公式已生成，有效期至YYYY-MM-DD」，下方显示公式状态卡片包含Top10看涨形态和DTW形状信息" }
+          ],
+          "expected_result": "成功调用POST /api/generate_formula接口，返回包含top10_bullish、dtw_patterns、dtw_threshold、generated_date、expire_date的规则数据",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-SIG-002",
+          "module": "买入信号引擎",
+          "sub_module": "生成买入公式-无数据",
+          "title": "股票日线数据不足时提示用户先抓取数据",
+          "priority": "高",
+          "pre_condition": "已选择一只股票但该股票没有日线数据或数据不足30条",
+          "steps": [
+            { "step_no": 1, "action": "点击「生成买入公式」按钮", "expected_result": "弹出错误提示：日线数据不足（当前X条，至少需要30条），请先抓取数据" },
+            { "step_no": 2, "action": "查看按钮状态", "expected_result": "按钮恢复为「生成买入公式」可再次点击" }
+          ],
+          "expected_result": "数据不足时返回400错误，不执行规则生成",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-SIG-003",
+          "module": "买入信号引擎",
+          "sub_module": "生成买入公式-未选股",
+          "title": "未选择股票时点击生成公式提示先选股",
+          "priority": "中",
+          "pre_condition": "未选择任何股票",
+          "steps": [
+            { "step_no": 1, "action": "点击「生成买入公式」按钮", "expected_result": "弹出提示：请先选择股票" }
+          ],
+          "expected_result": "未选股时不发送API请求，直接前端拦截",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-SIG-004",
+          "module": "买入信号引擎",
+          "sub_module": "生成买入公式-API验证",
+          "title": "POST /api/generate_formula返回正确的JSON格式",
+          "priority": "高",
+          "pre_condition": "后端服务正常运行，数据库中有002347的日线数据",
+          "steps": [
+            { "step_no": 1, "action": "发送POST请求到/api/generate_formula，body: {\"stock_code\":\"002347\"}", "expected_result": "返回HTTP 200，JSON格式响应" },
+            { "step_no": 2, "action": "检查response.success字段", "expected_result": "success=true" },
+            { "step_no": 3, "action": "检查response.rules.top10_bullish", "expected_result": "为数组，长度≤10，每个元素含name/cn_name/win_rate/total/wins字段" },
+            { "step_no": 4, "action": "检查response.rules.dtw_threshold", "expected_result": "为数值类型，合理范围0.05~1.0" },
+            { "step_no": 5, "action": "检查response.rules.expire_date", "expected_result": "日期字符串，为生成日期+30天" }
+          ],
+          "expected_result": "API返回完整的规则数据结构，各字段类型正确",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-SIG-005",
+          "module": "买入信号引擎",
+          "sub_module": "运行分析",
+          "title": "点击「运行分析」按钮扫描历史K线并标记买入点",
+          "priority": "高",
+          "pre_condition": "已为选中股票生成了买入公式（或MongoDB中有有效规则）",
+          "steps": [
+            { "step_no": 1, "action": "点击「运行分析」按钮", "expected_result": "按钮变为「分析中...」并禁用" },
+            { "step_no": 2, "action": "等待分析完成", "expected_result": "页面显示今日建议（买入/观望）、历史买入信号数量、K线图上标记红色B点" },
+            { "step_no": 3, "action": "鼠标悬浮B点", "expected_result": "Tooltip显示该日买入原因列表（形态/DTW/阳线/放量等）" }
+          ],
+          "expected_result": "成功调用GET /api/analyze接口，K线图正确标记买入信号B点，悬浮显示详细原因",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-SIG-006",
+          "module": "买入信号引擎",
+          "sub_module": "运行分析-自动生成",
+          "title": "MongoDB中无规则或规则过期时自动重新生成",
+          "priority": "高",
+          "pre_condition": "已选择一只股票，但MongoDB中没有该股票的规则或规则已过期",
+          "steps": [
+            { "step_no": 1, "action": "清除该股票的stock_rules文档（模拟无规则状态）", "expected_result": "MongoDB中无该股票规则" },
+            { "step_no": 2, "action": "点击「运行分析」按钮", "expected_result": "系统自动先生成规则再进行分析，最终正常返回结果" }
+          ],
+          "expected_result": "无有效规则时自动触发generate_rules后继续scan_signals，对用户透明",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-SIG-007",
+          "module": "买入信号引擎",
+          "sub_module": "运行分析-API验证",
+          "title": "GET /api/analyze返回正确的JSON格式",
+          "priority": "高",
+          "pre_condition": "后端服务正常运行，002347已有有效规则",
+          "steps": [
+            { "step_no": 1, "action": "发送GET请求到/api/analyze?stock_code=002347", "expected_result": "返回HTTP 200，JSON格式响应" },
+            { "step_no": 2, "action": "检查response.today_buy字段", "expected_result": "布尔值true/false" },
+            { "step_no": 3, "action": "检查response.today_reasons字段", "expected_result": "数组，today_buy=true时有内容否则为空数组" },
+            { "step_no": 4, "action": "检查response.signals数组", "expected_result": "每个元素含date/close/buy/reasons字段" },
+            { "step_no": 5, "action": "筛选buy=true的signals", "expected_result": "reasons数组非空，包含形态/DTW/阳线/放量等描述" }
+          ],
+          "expected_result": "API返回完整的历史扫描结果，买入信号有详细原因说明",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-SIG-008",
+          "module": "买入信号引擎",
+          "sub_module": "公式状态展示",
+          "title": "切换股票时自动加载该股票的公式状态",
+          "priority": "中",
+          "pre_condition": "股票A已生成公式，股票B未生成公式",
+          "steps": [
+            { "step_no": 1, "action": "选择股票A", "expected_result": "智能分析tab下显示公式状态卡片，包含Top10形态和DTW信息" },
+            { "step_no": 2, "action": "切换到股票B", "expected_result": "公式状态区域隐藏，显示默认提示文字" }
+          ],
+          "expected_result": "selectStock时自动调用loadFormulaStatus()加载当前股票的规则状态",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-SIG-009",
+          "module": "买入信号引擎",
+          "sub_module": "清除信号",
+          "title": "点击「清除信号」按钮删除该股票所有分析信号",
+          "priority": "中",
+          "pre_condition": "已运行过分析，有买入信号数据和K线图B点标记",
+          "steps": [
+            { "step_no": 1, "action": "点击「清除信号」按钮", "expected_result": "弹出确认对话框" },
+            { "step_no": 2, "action": "点击确认", "expected_result": "调用POST /api/clear_signals，页面恢复初始状态，K线图隐藏" }
+          ],
+          "expected_result": "成功清除MongoDB中的buy_signals集合数据，前端重置为空状态",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-SIG-010",
+          "module": "买入信号引擎",
+          "sub_module": "公式状态API",
+          "title": "GET /api/formula_status查询公式存在性和详情",
+          "priority": "中",
+          "pre_condition": "后端服务正常运行",
+          "steps": [
+            { "step_no": 1, "action": "GET /api/formula_status?stock_code=002347（已生成规则的股票）", "expected_result": "返回exists:true，包含rules详情" },
+            { "step_no": 2, "action": "GET /api/formula_status?stock_code=999999（不存在规则的股票）", "expected_result": "返回exists:false，message:未生成公式" }
+          ],
+          "expected_result": "API能正确判断规则是否存在并返回对应信息",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-SIG-011",
+          "module": "买入信号引擎",
+          "sub_module": "K线图B点标记",
+          "title": "K线图上买入信号以红色B标记显示",
+          "priority": "高",
+          "pre_condition": "已运行分析且有买入信号数据",
+          "steps": [
+            { "step_no": 1, "action": "观察K线图上的markPoint标记", "expected_result": "买入信号的日期位置显示红色B字样标记" },
+            { "step_no": 2, "action": "鼠标悬浮B标记", "expected_result": "Tooltip显示日期、OHLC价格、买入原因列表" },
+            { "step_no": 3, "action": "拖动dataZoom缩放K线图", "expected_result": "B标记随K线同步移动缩放" }
+          ],
+          "expected_result": "ECharts markPoint正确渲染买入信号B点，tooltip显示完整原因",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-SIG-012",
+          "module": "买入信号引擎",
+          "sub_module": "删除股票清理信号",
+          "title": "删除股票时同时清理信号图表和缓存",
+          "priority": "中",
+          "pre_condition": "已运行分析，K线图上有B点标记，currentSignals有数据",
+          "steps": [
+            { "step_no": 1, "action": "点击「删除股票」并确认", "expected_result": "signalChart被dispose，formulaStatus隐藏，analysisResult重置" },
+            { "step_no": 2, "action": "重新添加同一只股票并切到智能分析", "expected_result": "页面显示初始状态，无旧信号残留" }
+          ],
+          "expected_result": "deleteStock函数中正确清理signalChart实例和相关DOM元素",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-SIG-013",
+          "module": "买入信号引擎",
+          "sub_module": "窗口resize适配",
+          "title": "浏览器窗口大小变化时信号K线图自适应调整",
+          "priority": "低",
+          "pre_condition": "信号K线图已渲染显示",
+          "steps": [
+            { "step_no": 1, "action": "调整浏览器窗口大小", "expected_result": "signalChart.resize()被调用，K线图自适应新尺寸" }
+          ],
+          "expected_result": "window resize事件处理器中包含signalChart.resize()调用",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-SIG-014",
+          "module": "买入信号引擎",
+          "sub_module": "买入条件逻辑-形态触发",
+          "title": "Top10看涨形态在t日出现时记录为触发原因",
+          "priority": "高",
+          "pre_condition": "已生成规则，某日出现CDLHAMMER(锤子线)形态",
+          "steps": [
+            { "step_no": 1, "action": "检查该日信号数据的triggered_patterns", "expected_result": "包含'CDLHAMMER'" },
+            { "step_no": 2, "action": "检查该日信号数据的reasons", "expected_result": "包含'形态：锤子线（胜率XX%）'" }
+          ],
+          "expected_result": "TA-Lib形态检测正确识别并记录触发情况",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-SIG-015",
+          "module": "买入信号引擎",
+          "sub_module": "买入条件逻辑-DTW匹配",
+          "title": "最近20日收盘价与V/W模板DTW距离小于阈值时匹配成功",
+          "priority": "高",
+          "pre_condition": "已生成规则，dtw_threshold=0.308，某日收盘价序列与V模板距离0.25",
+          "steps": [
+            { "step_no": 1, "action": "检查该日信号数据的dtw_matched", "expected_result": "包含'V'" },
+            { "step_no": 2, "action": "检查该日信号数据的reasons", "expected_result": "包含'DTW匹配V型底（距离0.250）'" }
+          ],
+          "expected_result": "DTW形状匹配算法正确计算距离并与阈值比较",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-SIG-016",
+          "module": "买入信号引擎",
+          "sub_module": "买入条件逻辑-右侧阳线",
+          "title": "close>open时满足右侧阳线条件",
+          "priority": "中",
+          "pre_condition": "某日收盘价大于开盘价",
+          "steps": [
+            { "step_no": 1, "action": "检查该日is_yangxian字段", "expected_result": "true" },
+            { "step_no": 2, "action": "检查该日reasons", "expected_result": "包含'右侧阳线确认'" }
+          ],
+          "expected_result": "右侧阳线条件正确判断",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-SIG-017",
+          "module": "买入信号引擎",
+          "sub_module": "买入条件逻辑-成交量放大",
+          "title": "成交量>=过去20日均量*1.5时满足放量条件",
+          "priority": "中",
+          "pre_condition": "某日成交量是过去20日均量的2倍",
+          "steps": [
+            { "step_no": 1, "action": "检查该日vol_ratio字段", "expected_result": "约等于2.0" },
+            { "step_no": 2, "action": "检查该日reasons", "expected_result": "包含'成交量放大2.0倍'" }
+          ],
+          "expected_result": "成交量放大条件正确计算均量和比值",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-SIG-018",
+          "module": "买入信号引擎",
+          "sub_module": "综合买入条件",
+          "title": "(形态OR DTW) AND 阳线 AND 放量 才产生买入信号",
+          "priority": "高",
+          "pre_condition": "某日只有形态触发但不是阳线，另一日只有阳线和放量但没有形态和DTW",
+          "steps": [
+            { "step_no": 1, "action": "检查只有形态触发的阴线日", "expected_result": "buy=false" },
+            { "step_no": 2, "action": "检查只有阳线放量但无形态/DTW的日期", "expected_result": "buy=false" },
+            { "step_no": 3, "action": "检查同时满足三个条件的日期", "expected_result": "buy=true" }
+          ],
+          "expected_result": "买入条件严格遵循 (形态OR DTW) AND 阳线 AND 放量 的AND/OR逻辑",
+          "actual_result": "",
+          "status": ""
+        }
+      ]
+    },
+    {
+      "module": "卖出信号引擎",
+      "cases": [
+        {
+          "id": "TC-SELL-001",
+          "module": "卖出信号引擎",
+          "sub_module": "UI展示",
+          "title": "智能分析页面显示卖出信号相关按钮和状态区域",
+          "priority": "高",
+          "pre_condition": "已选择一只股票，后端服务正常运行",
+          "steps": [
+            { "step_no": 1, "action": "切换到「智能分析」tab页", "expected_result": "显示「生成卖出公式」和「运行卖出分析」按钮，以及卖出公式状态区域" },
+            { "step_no": 2, "action": "观察按钮样式", "expected_result": "生成卖出公式按钮为紫色背景，运行卖出分析按钮为绿色背景" },
+            { "step_no": 3, "action": "观察状态区域", "expected_result": "初始状态下卖出公式状态区域隐藏" }
+          ],
+          "expected_result": "智能分析页面正确展示卖出信号的UI元素",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-SELL-002",
+          "module": "卖出信号引擎",
+          "sub_module": "生成卖出公式",
+          "title": "点击「生成卖出公式」按钮成功生成Top10看跌形态和DTW顶部模式",
+          "priority": "高",
+          "pre_condition": "已选择一只股票且有足够日线数据（至少30天），后端服务正常运行",
+          "steps": [
+            { "step_no": 1, "action": "点击「生成卖出公式」按钮", "expected_result": "按钮文字变为'生成中...'，按钮禁用" },
+            { "step_no": 2, "action": "等待生成完成", "expected_result": "按钮恢复，页面弹出成功提示，显示有效期至日期" },
+            { "step_no": 3, "action": "查看卖出公式状态卡片", "expected_result": "显示Top10看跌形态列表（含中文名和胜率）、DTW顶部形状（倒V顶/M头）和阈值" }
+          ],
+          "expected_result": "成功调用POST /api/generate_sell_formula接口，返回包含top10_bearish、dtw_top_patterns、dtw_threshold等字段",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-SELL-003",
+          "module": "卖出信号引擎",
+          "sub_module": "运行卖出分析",
+          "title": "点击「运行卖出分析」扫描历史K线并产生B-S配对信号",
+          "priority": "高",
+          "pre_condition": "已生成卖出公式且已运行过买入分析产生B点信号",
+          "steps": [
+            { "step_no": 1, "action": "点击「运行卖出分析」按钮", "expected_result": "按钮文字变为'分析中...'，按钮禁用" },
+            { "step_no": 2, "action": "等待分析完成", "expected_result": "页面显示今日建议（卖出/持有）、B-S配对数量、配对信号表格、K线图上标记绿色S点" }
+          ],
+          "expected_result": "成功调用GET /api/sell_analyze接口，返回paired_signals数组，每个S点包含paired_buy_date和return_rate_pct",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-SELL-004",
+          "module": "卖出信号引擎",
+          "sub_module": "先B后S原则",
+          "title": "卖出信号只有在已有买入信号（B点）且尚未被卖出的情况下才有效",
+          "priority": "高",
+          "pre_condition": "已运行买入分析和卖出分析",
+          "steps": [
+            { "step_no": 1, "action": "检查所有S点的paired_buy_date字段", "expected_result": "每个S点都有对应的B点日期" },
+            { "step_no": 2, "action": "验证时间顺序", "expected_result": "所有S点的日期都晚于其配对的B点日期" },
+            { "step_no": 3, "action": "检查第一个B点之前是否有S点", "expected_result": "第一个B点之前不应存在任何S点" }
+          ],
+          "expected_result": "严格遵循'先B后S'原则，只有持有股票时才能产生有效的卖出信号",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-SELL-005",
+          "module": "卖出信号引擎",
+          "sub_module": "收益率计算",
+          "title": "B-S配对的收益率使用收盘价计算：(S收盘价 - B收盘价) / B收盘价 × 100",
+          "priority": "高",
+          "pre_condition": "已产生B-S配对信号",
+          "steps": [
+            { "step_no": 1, "action": "任选一对B-S信号", "expected_result": "获取paired_buy_close和close（S点收盘价）" },
+            { "step_no": 2, "action": "手动计算收益率", "expected_result": "(S收盘价 - B收盘价) / B收盘价 × 100 = return_rate_pct" },
+            { "step_no": 3, "action": "对比计算结果", "expected_result": "手动计算结果与API返回的return_rate_pct一致（误差<0.01）" }
+          ],
+          "expected_result": "收益率计算准确，基于B点和S点的收盘价",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-SELL-006",
+          "module": "卖出信号引擎",
+          "sub_module": "S点标记",
+          "title": "K线图上卖出信号以绿色S标记显示，悬浮显示卖出原因",
+          "priority": "高",
+          "pre_condition": "已运行卖出分析且有卖出信号数据",
+          "steps": [
+            { "step_no": 1, "action": "观察K线图上的markPoint标记", "expected_result": "卖出信号的日期位置显示绿色S字样标记" },
+            { "step_no": 2, "action": "鼠标悬浮在S点上", "expected_result": "tooltip显示'S'和收益率百分比" },
+            { "step_no": 3, "action": "检查S点颜色", "expected_result": "S点标记为绿色（#27ae60），与红色B点区分" }
+          ],
+          "expected_result": "ECharts markPoint正确渲染卖出信号S点，颜色为绿色，显示收益率信息",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-SELL-007",
+          "module": "卖出信号引擎",
+          "sub_module": "配对信号表格",
+          "title": "卖出分析结果显示B-S配对信号表格，包含买入日、卖出日、买卖价格、收益率、原因",
+          "priority": "高",
+          "pre_condition": "已运行卖出分析且有配对信号",
+          "steps": [
+            { "step_no": 1, "action": "查看配对信号表格", "expected_result": "表格列包括：买入日、卖出日、买价、卖价、收益率、卖出原因" },
+            { "step_no": 2, "action": "检查收益率颜色", "expected_result": "正收益率为绿色，负收益率为红色" },
+            { "step_no": 3, "action": "检查卖出原因列", "expected_result": "显示触发的看跌形态名称、DTW匹配模式、阴线确认、成交量放大等信息" }
+          ],
+          "expected_result": "配对信号表格完整展示B-S配对信息，格式清晰易读",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-SELL-008",
+          "module": "卖出信号引擎",
+          "sub_module": "今日判断",
+          "title": "最新交易日满足卖出条件时返回today_sell=true并显示原因",
+          "priority": "中",
+          "pre_condition": "最新交易日满足卖出条件（有活跃持仓+看跌形态/DTW+阴线+放量）",
+          "steps": [
+            { "step_no": 1, "action": "运行卖出分析", "expected_result": "返回today_sell=true" },
+            { "step_no": 2, "action": "查看今日建议标签", "expected_result": "显示'今日建议：卖出'，标签为绿色背景" },
+            { "step_no": 3, "action": "查看原因列表", "expected_result": "显示触发该日卖出的具体原因（如'看跌形态：射击之星（胜率80%）'等）" }
+          ],
+          "expected_result": "当日满足卖出条件时明确提示用户卖出建议及详细原因",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-SELL-009",
+          "module": "卖出信号引擎",
+          "sub_module": "无B点时无S点",
+          "title": "未运行买入分析或无B点信号时，运行卖出分析不产生S点",
+          "priority": "高",
+          "pre_condition": "已选择股票但未运行买入分析或买入分析无B点",
+          "steps": [
+            { "step_no": 1, "action": "直接点击「运行卖出分析」（未先生成买入公式和运行分析）", "expected_result": "自动先生成买入公式并扫描B点，然后扫描S点" },
+            { "step_no": 2, "action": "查看返回结果", "expected_result": "paired_signals数组可能为空或不为空，但严格遵循先B后S原则" },
+            { "step_no": 3, "action": "查看提示信息", "expected_result": "若无配对则显示'暂无B-S配对信号（需先运行买入分析产生B点）'" }
+          ],
+          "expected_result": "卖出分析会自动触发买入分析，确保B-S配对的完整性",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-SELL-010",
+          "module": "卖出信号引擎",
+          "sub_module": "公式过期处理",
+          "title": "卖出公式过期（超过30天）时自动重新生成",
+          "priority": "中",
+          "pre_condition": "上次生成卖出公式超过30天",
+          "steps": [
+            { "step_no": 1, "action": "运行卖出分析", "expected_result": "后端检测到公式过期，自动调用generate_sell_rules重新生成" },
+            { "step_no": 2, "action": "观察返回结果的generated_date", "expected_result": "generated_date为当天日期" },
+            { "step_no": 3, "action": "查看卖出公式状态卡片", "expected_result": "显示新的有效期至日期（当前日期+30天）" }
+          ],
+          "expected_result": "公式过期时自动重新生成，无需用户手动操作",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-SELL-011",
+          "module": "卖出信号引擎",
+          "sub_module": "清除卖出信号",
+          "title": "点击「清除卖出」按钮清除该股票的所有卖出信号数据",
+          "priority": "中",
+          "pre_condition": "已运行卖出分析且有卖出信号数据",
+          "steps": [
+            { "step_no": 1, "action": "点击「清除卖出」按钮", "expected_result": "弹出确认对话框" },
+            { "step_no": 2, "action": "点击确认", "expected_result": "页面弹出'卖出信号已清除'成功提示" },
+            { "step_no": 3, "action": "查看卖出分析结果区域", "expected_result": "结果区域清空，K线图上S点标记消失" },
+            { "step_no": 4, "action": "查看卖出公式状态", "expected_result": "卖出公式状态区域隐藏" }
+          ],
+          "expected_result": "成功调用POST /api/clear_sell_signals接口，数据库中sell_signals集合该股票数据被删除",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-SELL-012",
+          "module": "卖出信号引擎",
+          "sub_module": "删除股票联动",
+          "title": "删除股票时同时清除买入和卖出信号数据",
+          "priority": "高",
+          "pre_condition": "已选择一只股票且有买入和卖出信号数据",
+          "steps": [
+            { "step_no": 1, "action": "点击「删除股票」按钮并确认", "expected_result": "股票删除成功" },
+            { "step_no": 2, "action": "通过API查询buy_signals集合", "expected_result": "该股票的买入信号数据已被清除" },
+            { "step_no": 3, "action": "通过API查询sell_signals集合", "expected_result": "该股票的卖出信号数据已被清除" }
+          ],
+          "expected_result": "删除股票时联动清理buy_signals和sell_signals中的相关数据",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-SELL-013",
+          "module": "卖出信号引擎",
+          "sub_module": "API测试-生成公式",
+          "title": "POST /api/generate_sell_formula 接口参数校验和返回值验证",
+          "priority": "高",
+          "pre_condition": "后端服务正常运行",
+          "steps": [
+            { "step_no": 1, "action": "不传stock_code参数调用接口", "expected_result": "返回400错误，提示'stock_code is required'" },
+            { "step_no": 2, "action": "传入无效stock_code调用接口", "expected_result": "返回400错误，提示日线数据不足" },
+            { "step_no": 3, "action": "传入有效stock_code调用接口", "expected_result": "返回success=true，rules对象包含top10_bearish、dtw_top_patterns、dtw_threshold、generated_date、expire_date" }
+          ],
+          "expected_result": "API接口参数校验完善，返回值结构符合规范",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-SELL-014",
+          "module": "卖出信号引擎",
+          "sub_module": "API测试-卖出分析",
+          "title": "GET /api/sell_analyze 接口返回值结构和内容验证",
+          "priority": "高",
+          "pre_condition": "已生成买入和卖出公式，有K线数据",
+          "steps": [
+            { "step_no": 1, "action": "调用GET /api/sell_analyze?stock_code=xxx", "expected_result": "返回success=true，包含stock_code、today_sell、today_reasons、paired_signals字段" },
+            { "step_no": 2, "action": "检查paired_signals数组元素结构", "expected_result": "每个元素包含date、close、sell、paired_buy_date、paired_buy_close、return_rate_pct、reasons" },
+            { "step_no": 3, "action": "验证return_rate_pct类型", "expected_result": "return_rate_pct为数值型，保留2位小数" }
+          ],
+          "expected_result": "API返回完整的B-S配对扫描结果，数据结构清晰",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-SELL-015",
+          "module": "卖出信号引擎",
+          "sub_module": "综合卖出条件",
+          "title": "(看跌形态OR DTW顶部) AND 阴线 AND 放量 才产生卖出信号",
+          "priority": "高",
+          "pre_condition": "某日只有看跌形态触发但不是阴线，另一日只有阴线和放量但没有看跌形态/DTW",
+          "steps": [
+            { "step_no": 1, "action": "检查只有看跌形态触发的阳线日", "expected_result": "不产生S点（即使有活跃持仓）" },
+            { "step_no": 2, "action": "检查只有阴线放量但无看跌形态/DTW的日期", "expected_result": "不产生S点" },
+            { "step_no": 3, "action": "检查同时满足三个条件且有活跃持仓的日期", "expected_result": "产生S点" }
+          ],
+          "expected_result": "卖出条件严格遵循 (看跌形态OR DTW顶部) AND 阴线 AND 放量 的AND/OR逻辑",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-SELL-016",
+          "module": "卖出信号引擎",
+          "sub_module": "数据不足处理",
+          "title": "日线数据不足30天时无法生成卖出公式和分析",
+          "priority": "中",
+          "pre_condition": "股票日线数据少于30天",
+          "steps": [
+            { "step_no": 1, "action": "点击「生成卖出公式」", "expected_result": "返回错误提示'日线数据不足（当前xx条，至少需要30条），请先抓取数据'" },
+            { "step_no": 2, "action": "点击「运行卖出分析」", "expected_result": "返回相同的数据不足错误提示" }
+          ],
+          "expected_result": "数据不足时友好提示用户先抓取数据，不会报错崩溃",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-SELL-017",
+          "module": "卖出信号引擎",
+          "sub_module": "公式状态持久化",
+          "title": "刷新页面后卖出公式状态仍然显示（从MongoDB读取）",
+          "priority": "中",
+          "pre_condition": "已生成卖出公式且未过期",
+          "steps": [
+            { "step_no": 1, "action": "生成卖出公式", "expected_result": "公式状态卡片显示" },
+            { "step_no": 2, "action": "刷新浏览器页面", "expected_result": "切换到智能分析tab页时自动加载卖出公式状态" },
+            { "step_no": 3, "action": "查看公式状态", "expected_result": "显示与刷新前相同的Top10看跌形态、DTW模式和有效期" }
+          ],
+          "expected_result": "卖出公式持久化存储在MongoDB的stock_sell_rules集合中，页面刷新后可恢复显示",
+          "actual_result": "",
+          "status": ""
+        },
+        {
+          "id": "TC-SELL-018",
+          "module": "卖出信号引擎",
+          "sub_module": "多股票独立",
+          "title": "不同股票的卖出规则和信号相互独立，互不影响",
+          "priority": "中",
+          "pre_condition": "数据库中有至少两只股票",
+          "steps": [
+            { "step_no": 1, "action": "选择股票A并生成卖出公式", "expected_result": "股票A的卖出公式生成成功" },
+            { "step_no": 2, "action": "切换到股票B并查看卖出公式状态", "expected_result": "股票B无卖出公式或显示自己的公式（非A的）" },
+            { "step_no": 3, "action": "为股票B生成卖出公式", "expected_result": "股票B获得独立的卖出规则，与A不同" }
+          ],
+          "expected_result": "每只股票的卖出规则和信号独立存储，按stock_code区分",
+          "actual_result": "",
+          "status": ""
+        }
+      ]
+    }
+  ]
+}

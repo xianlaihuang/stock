@@ -1,0 +1,52 @@
+sell_engine:
+  hold_period: 5
+  volume_ratio: 1.5
+  volume_ma_period: 20
+  dtw_window: 20
+  dtw_default_threshold: 0.3
+  dtw_percentile: 10
+  dtw_min_matches: 5
+  rule_expire_days: 30
+  top_n_patterns: 10
+  min_occurrences: 3
+  drop_threshold_pct: -0.02
+
+dtw_top_templates:
+  INVERSE_V: [1, 0.5, 0, -0.5, -1]
+  M_TOP: [1, 0.3, 0.8, 0.2, 0.6, 0]
+
+bearish_patterns:
+  - CDLSHOOTINGSTAR
+  - CDLHANGINGMAN
+  - CDLEVENINGSTAR
+  - CDLEVENINGDOJISTAR
+  - CDLDARKCLOUDCOVER
+  - CDL3BLACKCROWS
+  - CDL2CROWS
+  - CDLBELTHOLD
+  - CDLONNECK
+  - CDLIDENTICAL3CROWS
+  - CDLUPSIDEGAP2CROWS
+  - CDLADVANCEBLOCK
+  - CDLSTALLEDPATTERN
+  - CDLGRAVESTONEDOJI
+  - CDLHIGHWAVE
+  - CDLHARAMI
+  - CDLHARAMICROSS
+  - CDLDOJISTAR
+  - CDLKICKING
+  - CDLKICKINGBYLENGTH
+  - CDLCOUNTERATTACK
+  - CDLBREAKAWAY
+  - CDLMATCHINGLOW
+  - CDL3INSIDE
+  - CDL3OUTSIDE
+  - CDLRISEFALL3METHODS
+  - CDL3STARSINSOUTH
+  - CDL3LINESTRIKE
+  - CDLXSIDEGAP3METHODS
+  - CDLTASUKIGAP
+  - CDLUNIQUE3RIVER
+  - CDLTRICKS
+  - CDLSPINNINGTOP
+  - CDLGAPSIDEBYWHITELINE

@@ -1,0 +1,430 @@
+{
+  "template_info": {
+    "name": "V2公式生成与运行分析测试用例",
+    "version": "2.0",
+    "description": "V2公式生成与运行分析功能测试用例",
+    "prd_reference": "2026-0511/V2公式生成与运行分析PRD.md"
+  },
+  "test_cases": [
+    {
+      "category": "V2公式生成",
+      "cases": [
+        {
+          "id": "TC-V2-001",
+          "module": "V2公式生成",
+          "sub_module": "数据预处理",
+          "title": "数据预处理-去除首尾交易日",
+          "priority": "high",
+          "pre_condition": "股票002347已有800条日K线数据",
+          "steps": [
+            {"step_no": 1, "action": "调用POST /api/v2/calculate_weights，stock_code=002347", "expected_result": "返回success=true"},
+            {"step_no": 2, "action": "检查第一层预处理是否去除了前10个和后5个交易日", "expected_result": "有效数据范围为第11条到倒数第6条"},
+            {"step_no": 3, "action": "检查价格<=0的数据是否被过滤", "expected_result": "所有参与计算的价格均>0"}
+          ]
+        },
+        {
+          "id": "TC-V2-002",
+          "module": "V2公式生成",
+          "sub_module": "S数组提取",
+          "title": "S数组提取-高点间距和抛物线过滤",
+          "priority": "high",
+          "pre_condition": "股票002347已有足够日K线数据",
+          "steps": [
+            {"step_no": 1, "action": "触发V2公式生成", "expected_result": "S数组提取成功"},
+            {"step_no": 2, "action": "验证相邻S点间距>=5个交易日", "expected_result": "所有相邻S点间距>=5"},
+            {"step_no": 3, "action": "验证相邻S点之间价格连线不是开口向上抛物线", "expected_result": "二次拟合系数a<=0"},
+            {"step_no": 4, "action": "验证S数组最大数量<=50", "expected_result": "S数组长度<=50"}
+          ]
+        },
+        {
+          "id": "TC-V2-003",
+          "module": "V2公式生成",
+          "sub_module": "B数组提取",
+          "title": "B数组提取-低点间距和抛物线过滤",
+          "priority": "high",
+          "pre_condition": "股票002347已有足够日K线数据",
+          "steps": [
+            {"step_no": 1, "action": "触发V2公式生成", "expected_result": "B数组提取成功"},
+            {"step_no": 2, "action": "验证相邻B点间距>=5个交易日", "expected_result": "所有相邻B点间距>=5"},
+            {"step_no": 3, "action": "验证相邻B点之间价格连线不是开口向下抛物线", "expected_result": "二次拟合系数a>=0"},
+            {"step_no": 4, "action": "验证B数组最大数量<=50", "expected_result": "B数组长度<=50"}
+          ]
+        },
+        {
+          "id": "TC-V2-004",
+          "module": "V2公式生成",
+          "sub_module": "规则有效性验证",
+          "title": "第一层-卖出规则在S点前后90天匹配",
+          "priority": "high",
+          "pre_condition": "S数组已提取，卖出规则已注册",
+          "steps": [
+            {"step_no": 1, "action": "触发V2公式生成", "expected_result": "每个S点前后90天窗口内匹配卖出规则"},
+            {"step_no": 2, "action": "检查匹配到的规则奖励值是否+1", "expected_result": "匹配规则的reward>0"},
+            {"step_no": 3, "action": "验证M顶跌破等形态规则的参数合理性", "expected_result": "规则在合理时间跨度内触发"}
+          ]
+        },
+        {
+          "id": "TC-V2-005",
+          "module": "V2公式生成",
+          "sub_module": "规则有效性验证",
+          "title": "第一层-买入规则在B点前后90天匹配",
+          "priority": "high",
+          "pre_condition": "B数组已提取，买入规则已注册",
+          "steps": [
+            {"step_no": 1, "action": "触发V2公式生成", "expected_result": "每个B点前后90天窗口内匹配买入规则"},
+            {"step_no": 2, "action": "检查匹配到的规则奖励值是否+1", "expected_result": "匹配规则的reward>0"},
+            {"step_no": 3, "action": "验证W底突破等形态规则的参数合理性", "expected_result": "规则在合理时间跨度内触发"}
+          ]
+        },
+        {
+          "id": "TC-V2-006",
+          "module": "V2公式生成",
+          "sub_module": "迭代优化",
+          "title": "第二大层-迭代优化收敛",
+          "priority": "high",
+          "pre_condition": "第一层计算完成",
+          "steps": [
+            {"step_no": 1, "action": "触发V2公式生成", "expected_result": "迭代开始"},
+            {"step_no": 2, "action": "检查迭代次数<=100", "expected_result": "iteration_count<=100"},
+            {"step_no": 3, "action": "检查收敛条件：连续3次收益率变化<0.1%", "expected_result": "满足收敛条件时停止迭代"},
+            {"step_no": 4, "action": "检查最终取成功率和收益率最大的结果", "expected_result": "total_return和win_rate为历史最优"}
+          ]
+        },
+        {
+          "id": "TC-V2-007",
+          "module": "V2公式生成",
+          "sub_module": "B点有效性验证",
+          "title": "B点有效性-收益计算和奖惩",
+          "priority": "high",
+          "pre_condition": "B/S点已打标",
+          "steps": [
+            {"step_no": 1, "action": "检查B点收益计算：BS之间最高价-B点价格", "expected_result": "收益=(max_high-buy_close)/buy_close"},
+            {"step_no": 2, "action": "收益<0时，触发规则惩罚值+1", "expected_result": "penalty增加"},
+            {"step_no": 3, "action": "0<=收益<10%时，奖励值+1", "expected_result": "reward增加1"},
+            {"step_no": 4, "action": "10%<=收益<20%时，奖励值+2", "expected_result": "reward增加2"},
+            {"step_no": 5, "action": "20%<=收益<30%时，奖励值+3", "expected_result": "reward增加3"}
+          ]
+        },
+        {
+          "id": "TC-V2-008",
+          "module": "V2公式生成",
+          "sub_module": "S点有效性验证",
+          "title": "S点有效性-避免回撤计算和奖惩",
+          "priority": "high",
+          "pre_condition": "B/S点已打标",
+          "steps": [
+            {"step_no": 1, "action": "检查S点避免回撤计算：S点价格-SB之间最低价", "expected_result": "避免回撤=(sell_close-min_low)/sell_close"},
+            {"step_no": 2, "action": "避免回撤<0时，触发规则惩罚值+1", "expected_result": "penalty增加"},
+            {"step_no": 3, "action": "0<=避免回撤<10%时，奖励值+1", "expected_result": "reward增加1"},
+            {"step_no": 4, "action": "10%<=避免回撤<20%时，奖励值+2", "expected_result": "reward增加2"}
+          ]
+        },
+        {
+          "id": "TC-V2-009",
+          "module": "V2公式生成",
+          "sub_module": "权重计算",
+          "title": "模块2-最终权重计算和归一化",
+          "priority": "high",
+          "pre_condition": "奖励值和惩罚值已计算",
+          "steps": [
+            {"step_no": 1, "action": "检查原始权重=reward-penalty", "expected_result": "raw_weight计算正确"},
+            {"step_no": 2, "action": "检查有效权重=max(原始权重,0)", "expected_result": "负权重置0"},
+            {"step_no": 3, "action": "检查归一化权重=有效权重/总有效权重", "expected_result": "同组归一化权重之和=1"},
+            {"step_no": 4, "action": "检查胜率=reward/(reward+penalty)", "expected_result": "win_rate在0-1之间"},
+            {"step_no": 5, "action": "检查综合评分=归一化权重×胜率", "expected_result": "score计算正确"},
+            {"step_no": 6, "action": "检查规则分级：strong>=0.15, medium>=0.05, weak<0.05", "expected_result": "level分配正确"}
+          ]
+        },
+        {
+          "id": "TC-V2-010",
+          "module": "V2公式生成",
+          "sub_module": "数据不足",
+          "title": "数据不足时公式生成失败",
+          "priority": "medium",
+          "pre_condition": "股票数据不足200条",
+          "steps": [
+            {"step_no": 1, "action": "调用POST /api/v2/calculate_weights，stock_code=新股票", "expected_result": "返回success=false"},
+            {"step_no": 2, "action": "检查错误消息包含数据不足提示", "expected_result": "message包含'数据不足'"}
+          ]
+        },
+        {
+          "id": "TC-V2-011",
+          "module": "V2公式生成",
+          "sub_module": "参数校验",
+          "title": "缺少stock_code参数",
+          "priority": "medium",
+          "pre_condition": "无",
+          "steps": [
+            {"step_no": 1, "action": "调用POST /api/v2/calculate_weights，不传stock_code", "expected_result": "返回400错误"},
+            {"step_no": 2, "action": "检查错误消息", "expected_result": "message包含'stock_code is required'"}
+          ]
+        }
+      ]
+    },
+    {
+      "category": "V2分析功能",
+      "cases": [
+        {
+          "id": "TC-V2-012",
+          "module": "V2分析",
+          "sub_module": "B/S打标",
+          "title": "B/S点成对出现",
+          "priority": "high",
+          "pre_condition": "股票002347已生成V2权重",
+          "steps": [
+            {"step_no": 1, "action": "调用GET /api/v2/analyze?stock_code=002347", "expected_result": "返回success=true"},
+            {"step_no": 2, "action": "检查信号列表中第一个信号为B", "expected_result": "paired_signals[0].type='B'"},
+            {"step_no": 3, "action": "检查B和S交替出现", "expected_result": "B后必须跟S，S后必须跟B"},
+            {"step_no": 4, "action": "检查B和S之间不会再出现B", "expected_result": "无连续B点"}
+          ]
+        },
+        {
+          "id": "TC-V2-013",
+          "module": "V2分析",
+          "sub_module": "B/S打标",
+          "title": "关键形态必买直接触发B点",
+          "priority": "high",
+          "pre_condition": "股票002347已生成V2权重，存在W底突破/V反底部/头肩底突破/旗形突破信号",
+          "steps": [
+            {"step_no": 1, "action": "调用分析接口", "expected_result": "返回信号列表"},
+            {"step_no": 2, "action": "检查W底突破触发的B点confidence=1.0", "expected_result": "必买信号confidence=1.0"},
+            {"step_no": 3, "action": "检查V反底部触发的B点直接生成", "expected_result": "无需凑够2条规则"}
+          ]
+        },
+        {
+          "id": "TC-V2-014",
+          "module": "V2分析",
+          "sub_module": "B/S打标",
+          "title": "关键形态必卖直接触发S点",
+          "priority": "high",
+          "pre_condition": "股票002347已生成V2权重，存在M顶跌破/V反顶部/旗形跌破/均线趋势打破必卖信号",
+          "steps": [
+            {"step_no": 1, "action": "调用分析接口", "expected_result": "返回信号列表"},
+            {"step_no": 2, "action": "检查V反顶部触发的S点confidence=1.0", "expected_result": "必卖信号confidence=1.0"},
+            {"step_no": 3, "action": "检查M顶跌破触发的S点直接生成", "expected_result": "无需凑够2条规则"}
+          ]
+        },
+        {
+          "id": "TC-V2-015",
+          "module": "V2分析",
+          "sub_module": "买入确认",
+          "title": "买入信号需等1天阳线确认",
+          "priority": "high",
+          "pre_condition": "买入规则触发",
+          "steps": [
+            {"step_no": 1, "action": "买入规则触发日T", "expected_result": "T日不立即生成B点"},
+            {"step_no": 2, "action": "T+1日为阳线（close>open且close>T日close）", "expected_result": "T+1日生成B点，confirmed=True"},
+            {"step_no": 3, "action": "T+1日为阴线", "expected_result": "买入候选作废，不生成B点"}
+          ]
+        },
+        {
+          "id": "TC-V2-016",
+          "module": "V2分析",
+          "sub_module": "买入限制",
+          "title": "买入限制规则过滤",
+          "priority": "high",
+          "pre_condition": "买入信号触发",
+          "steps": [
+            {"step_no": 1, "action": "当日收盘价<=MA5", "expected_result": "买入信号被取消"},
+            {"step_no": 2, "action": "当日收盘价<=开盘价（阴线）", "expected_result": "买入信号被取消"},
+            {"step_no": 3, "action": "MA20下降且价格<MA20", "expected_result": "买入信号被取消"}
+          ]
+        },
+        {
+          "id": "TC-V2-017",
+          "module": "V2分析",
+          "sub_module": "最低持仓",
+          "title": "最低持仓1个交易日",
+          "priority": "high",
+          "pre_condition": "B点已生成",
+          "steps": [
+            {"step_no": 1, "action": "B点后1天内出现卖出信号", "expected_result": "S点不被过滤（min_hold=1）"},
+            {"step_no": 2, "action": "B点和S点同一天", "expected_result": "S点被过滤（idx-last_idx<1）"}
+          ]
+        },
+        {
+          "id": "TC-V2-018",
+          "module": "V2分析",
+          "sub_module": "不可偷看未来",
+          "title": "B/S打标不能使用未来数据",
+          "priority": "high",
+          "pre_condition": "历史K线数据完整",
+          "steps": [
+            {"step_no": 1, "action": "检查打标逻辑仅使用idx及之前的数据", "expected_result": "不引用idx之后的数据"},
+            {"step_no": 2, "action": "验算有效性时可使用未来数据", "expected_result": "B/S点确定后的验算可引用后续K线"}
+          ]
+        },
+        {
+          "id": "TC-V2-019",
+          "module": "V2分析",
+          "sub_module": "条件展示",
+          "title": "充分必要条件展示",
+          "priority": "medium",
+          "pre_condition": "调用分析接口",
+          "steps": [
+            {"step_no": 1, "action": "调用GET /api/v2/analyze", "expected_result": "返回conditions字段"},
+            {"step_no": 2, "action": "检查买入必要条件包含：非阴线、突破5日线、阳线确认、非下跌趋势", "expected_result": "buy_necessary包含4项"},
+            {"step_no": 3, "action": "检查买入充分条件包含：关键形态必买、加权买入", "expected_result": "buy_sufficient包含2项"},
+            {"step_no": 4, "action": "检查卖出必要条件包含：当前持仓", "expected_result": "sell_necessary包含1项"},
+            {"step_no": 5, "action": "检查卖出充分条件包含：关键形态必卖、计数卖出", "expected_result": "sell_sufficient包含2项"}
+          ]
+        },
+        {
+          "id": "TC-V2-020",
+          "module": "V2分析",
+          "sub_module": "日期过滤",
+          "title": "分析接口支持日期范围过滤",
+          "priority": "medium",
+          "pre_condition": "股票002347已生成V2权重",
+          "steps": [
+            {"step_no": 1, "action": "调用GET /api/v2/analyze?stock_code=002347&start=2025-01-01&end=2025-12-31", "expected_result": "只返回2025年范围内的信号"},
+            {"step_no": 2, "action": "不传start和end参数", "expected_result": "返回所有信号"}
+          ]
+        }
+      ]
+    },
+    {
+      "category": "V2持久化",
+      "cases": [
+        {
+          "id": "TC-V2-021",
+          "module": "V2持久化",
+          "sub_module": "权重持久化",
+          "title": "权重按股票代码持久化",
+          "priority": "high",
+          "pre_condition": "V2公式已生成",
+          "steps": [
+            {"step_no": 1, "action": "生成V2权重后调用GET /api/v2/weights?stock_code=002347", "expected_result": "返回exists=true和权重数据"},
+            {"step_no": 2, "action": "检查权重字段：buy_weights, sell_weights, buy_details, sell_details, iteration_count, total_return, win_rate", "expected_result": "所有字段完整"},
+            {"step_no": 3, "action": "重新生成权重", "expected_result": "权重被更新，updated_at变化"}
+          ]
+        },
+        {
+          "id": "TC-V2-022",
+          "module": "V2持久化",
+          "sub_module": "权重删除",
+          "title": "删除V2权重",
+          "priority": "medium",
+          "pre_condition": "V2权重已存在",
+          "steps": [
+            {"step_no": 1, "action": "调用DELETE /api/v2/weights?stock_code=002347", "expected_result": "返回success=true"},
+            {"step_no": 2, "action": "再次查询权重", "expected_result": "返回exists=false"}
+          ]
+        },
+        {
+          "id": "TC-V2-023",
+          "module": "V2持久化",
+          "sub_module": "信号持久化",
+          "title": "B/S信号按股票代码持久化",
+          "priority": "high",
+          "pre_condition": "分析接口已调用",
+          "steps": [
+            {"step_no": 1, "action": "分析后信号自动持久化到MongoDB", "expected_result": "stock_signals_v2集合中有对应记录"},
+            {"step_no": 2, "action": "重新分析", "expected_result": "信号被更新"}
+          ]
+        },
+        {
+          "id": "TC-V2-024",
+          "module": "V2持久化",
+          "sub_module": "信号删除",
+          "title": "删除V2信号",
+          "priority": "medium",
+          "pre_condition": "V2信号已存在",
+          "steps": [
+            {"step_no": 1, "action": "调用DELETE /api/v2/signals?stock_code=002347", "expected_result": "返回success=true"},
+            {"step_no": 2, "action": "再次查询信号", "expected_result": "信号已被删除"}
+          ]
+        }
+      ]
+    },
+    {
+      "category": "V2规则参数",
+      "cases": [
+        {
+          "id": "TC-V2-025",
+          "module": "V2规则",
+          "sub_module": "V反顶部",
+          "title": "V反顶部用high找高点且左侧累计涨幅>=5%",
+          "priority": "high",
+          "pre_condition": "存在V型顶部形态",
+          "steps": [
+            {"step_no": 1, "action": "检查V反顶部使用high而非close找高点", "expected_result": "高点为区间内最高价"},
+            {"step_no": 2, "action": "检查回看窗口为20天", "expected_result": "lookback=20"},
+            {"step_no": 3, "action": "检查左侧累计涨幅>=5%", "expected_result": "rise_pct>=0.05"},
+            {"step_no": 4, "action": "检查从高点回落>=2%", "expected_result": "drop_pct>=0.02"}
+          ]
+        },
+        {
+          "id": "TC-V2-026",
+          "module": "V2规则",
+          "sub_module": "V反底部",
+          "title": "V反底部用low找低点且左侧累计跌幅>=5%",
+          "priority": "high",
+          "pre_condition": "存在V型底部形态",
+          "steps": [
+            {"step_no": 1, "action": "检查V反底部使用low而非close找低点", "expected_result": "低点为区间内最低价"},
+            {"step_no": 2, "action": "检查回看窗口为20天", "expected_result": "lookback=20"},
+            {"step_no": 3, "action": "检查左侧累计跌幅>=5%", "expected_result": "drop_pct>=0.05"},
+            {"step_no": 4, "action": "检查反弹>=2%", "expected_result": "bounce_pct>=0.02"}
+          ]
+        },
+        {
+          "id": "TC-V2-027",
+          "module": "V2规则",
+          "sub_module": "M顶跌破",
+          "title": "M顶跌破从高点回落2%触发",
+          "priority": "high",
+          "pre_condition": "存在M顶形态",
+          "steps": [
+            {"step_no": 1, "action": "检查M顶跌破使用从高点回落2%而非颈线跌破", "expected_result": "close<top_price*0.98"},
+            {"step_no": 2, "action": "检查M顶跌破为必卖规则", "expected_result": "触发后confidence=1.0"}
+          ]
+        },
+        {
+          "id": "TC-V2-028",
+          "module": "V2规则",
+          "sub_module": "均线趋势打破必卖",
+          "title": "均线趋势打破必卖只在上升趋势触发",
+          "priority": "high",
+          "pre_condition": "MA处于上升状态",
+          "steps": [
+            {"step_no": 1, "action": "检查MA必须处于上升状态（ma[idx]>ma[idx-1]）", "expected_result": "下跌趋势中不触发"},
+            {"step_no": 2, "action": "检查价格未远离均线（<5%）", "expected_result": "close>=ma*0.95"},
+            {"step_no": 3, "action": "检查近期高点回落<5%", "expected_result": "确认上升趋势"},
+            {"step_no": 4, "action": "检查支持率>=70%", "expected_result": "support_ratio>=0.7"}
+          ]
+        }
+      ]
+    },
+    {
+      "category": "V2旧版兼容",
+      "cases": [
+        {
+          "id": "TC-V2-029",
+          "module": "V2兼容",
+          "sub_module": "旧版保留",
+          "title": "旧版API仍可正常使用",
+          "priority": "medium",
+          "pre_condition": "旧版API路由已注册",
+          "steps": [
+            {"step_no": 1, "action": "调用POST /api/calculate_weights", "expected_result": "旧版公式生成仍可用"},
+            {"step_no": 2, "action": "调用GET /api/analyze", "expected_result": "旧版分析仍可用"}
+          ]
+        },
+        {
+          "id": "TC-V2-030",
+          "module": "V2兼容",
+          "sub_module": "规则共享",
+          "title": "V2和旧版共享规则库",
+          "priority": "medium",
+          "pre_condition": "dynamic_weight_engine.py中规则已注册",
+          "steps": [
+            {"step_no": 1, "action": "检查V2使用的买入规则和旧版一致", "expected_result": "BUY_RULES相同"},
+            {"step_no": 2, "action": "检查V2使用的卖出规则和旧版一致", "expected_result": "SELL_RULES相同"},
+            {"step_no": 3, "action": "检查必买/必卖规则正确注册", "expected_result": "MANDATORY_BUY_RULES和MANDATORY_SELL_RULES包含4个规则"}
+          ]
+        }
+      ]
+    }
+  ]
+}

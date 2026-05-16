@@ -1,0 +1,12 @@
+Flask==2.3.3
+Flask-CORS==4.0.0
+pymongo
+requests==2.31.0
+beautifulsoup4==4.12.2
+python-dotenv==1.0.0
+TA-Lib
+fastdtw
+scipy
+pyyaml
+numpy
+pytdx

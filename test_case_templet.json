@@ -1,0 +1,25 @@
+{
+  "template_info": {
+    "name": "测试用例模板",
+    "version": "1.0",
+    "description": "股票分析软件功能测试用例模板"
+  },
+  "test_case": {
+    "id": "",
+    "module": "",
+    "sub_module": "",
+    "title": "",
+    "priority": "",
+    "pre_condition": "",
+    "steps": [
+      {
+        "step_no": 1,
+        "action": "",
+        "expected_result": ""
+      }
+    ],
+    "expected_result": "",
+    "actual_result": "",
+    "status": ""
+  }
+}
