@@ -2,7 +2,7 @@
 # 通过 SSH 将本地改动提交并推送到 GitHub
 # 用法:
 #   ./git-push-github-ssh.sh "提交说明"
-#   ./git-push-github-ssh.sh -m "提交说明" -b main
+#   ./git-push-github-ssh.sh -m "提交说明" -b main   # 覆盖默认主分支
 #   ./git-push-github-ssh.sh --dry-run
 
 set -euo pipefail
@@ -10,7 +10,7 @@ set -euo pipefail
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}"
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/id_ed25519}"
 GIT_REMOTE="${GIT_REMOTE:-origin}"
-DEFAULT_BRANCH="${DEFAULT_BRANCH:-main}"
+DEFAULT_BRANCH="${DEFAULT_BRANCH:-master}"
 COMMIT_MSG=""
 TARGET_BRANCH=""
 DRY_RUN=0
@@ -26,7 +26,7 @@ usage() {
 
 选项:
   -m, --message MSG   提交说明（必填）
-  -b, --branch NAME   推送分支（默认: 当前分支，若无则用 main）
+  -b, --branch NAME   推送分支（默认: master，仓库无 master 时用 main）
   -r, --remote NAME   远程名（默认: origin）
   -k, --key PATH      SSH 私钥路径（默认: ~/.ssh/id_ed25519）
   --no-add-all        不自动 git add -A，仅提交已暂存文件
@@ -102,10 +102,42 @@ ensure_ssh_remote() {
   fi
 }
 
+resolve_default_branch() {
+  local b="$1"
+  if git show-ref --verify --quiet "refs/heads/$b" \
+    || git show-ref --verify --quiet "refs/remotes/${GIT_REMOTE}/${b}"; then
+    echo "$b"
+    return
+  fi
+  if [[ "$b" == "master" ]] && git show-ref --verify --quiet refs/heads/main; then
+    echo "main"
+    return
+  fi
+  if [[ "$b" == "master" ]] && git show-ref --verify --quiet "refs/remotes/${GIT_REMOTE}/main"; then
+    echo "main"
+    return
+  fi
+  echo "$b"
+}
+
 resolve_branch() {
-  if [[ -n "$TARGET_BRANCH" ]]; then echo "$TARGET_BRANCH"; return; fi
-  local cur; cur="$(git branch --show-current 2>/dev/null || true)"
-  [[ -n "$cur" ]] && echo "$cur" || echo "$DEFAULT_BRANCH"
+  if [[ -n "$TARGET_BRANCH" ]]; then
+    echo "$TARGET_BRANCH"
+    return
+  fi
+  resolve_default_branch "$DEFAULT_BRANCH"
+}
+
+checkout_target_branch() {
+  local branch="$1"
+  log "切换到分支: $branch"
+  if git show-ref --verify --quiet "refs/heads/$branch"; then
+    run git checkout "$branch"
+  elif git show-ref --verify --quiet "refs/remotes/${GIT_REMOTE}/${branch}"; then
+    run git checkout -B "$branch" "${GIT_REMOTE}/${branch}"
+  else
+    run git checkout -b "$branch"
+  fi
 }
 
 main() {
@@ -119,7 +151,8 @@ main() {
   ensure_ssh_remote
 
   local branch; branch="$(resolve_branch)"
-  log "目标分支: $branch"
+  log "目标分支: $branch（默认主分支，可用 -b 覆盖）"
+  checkout_target_branch "$branch"
   run git status --short
 
   if [[ "$ADD_ALL" -eq 1 ]]; then
