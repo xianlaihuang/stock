@@ -208,8 +208,8 @@ def merge_w_v_events(w_events, v_events):
     return _dedupe_by_entry(all_e, min_gap=5)
 
 
-# 双针探底：须在 V/W 左侧底部附近，且左侧跌段总跌幅 >= 10%
-DOUBLE_NEEDLE_MIN_TOTAL_DROP = 0.10
+# 双针探底：须在 V/W 左侧底部附近，且左侧跌段总跌幅 >= 4%
+DOUBLE_NEEDLE_MIN_TOTAL_DROP = 0.04
 DOUBLE_NEEDLE_LEFT_BOTTOM_MAX_AFTER = 4
 DOUBLE_NEEDLE_LEFT_BOTTOM_MAX_BEFORE = 1
 

@@ -318,6 +318,106 @@ def sell_bearish_pattern(df, idx):
     return True
 
 
+def _near_high_pressure_zone_at_idx(df, idx, pivot_min_bars=25, pivot_max_bars=220):
+    """
+    历史压力位：局部高点 P 形成压力带（P≥30 为 ±2 元，否则 ±2%），
+    自该日起至昨日区间内最高价未突破带上沿；当日 high 切入压力带。
+    """
+    if idx < 80:
+        return False
+    high = df['high'].values.astype(float) if 'high' in df.columns else df['close'].values.astype(float)
+    pivot_i = None
+    pivot_p = -1.0
+    for i in range(idx - pivot_min_bars, max(10, idx - pivot_max_bars), -1):
+        if i < 5 or i + 5 > len(high):
+            continue
+        hh = float(high[i])
+        if hh < float(np.max(high[i - 5 : i + 6])) - 1e-9:
+            continue
+        zhi = (hh + 2.0) if hh >= 30.0 else hh * 1.02
+        if i + 1 < idx:
+            mx_after = float(np.max(high[i + 1 : idx]))
+            if mx_after >= zhi * (1.0 - 1e-9):
+                continue
+        pivot_i = i
+        pivot_p = hh
+        break
+    if pivot_i is None or pivot_p <= 0:
+        return False
+    if pivot_p >= 30.0:
+        zone_lo = pivot_p - 2.0
+    else:
+        zone_lo = pivot_p * 0.98
+    return float(high[idx]) >= zone_lo * 0.995
+
+
+def _is_yizi_limit_up_bar(df, idx, flat_range_max_rel=0.003):
+    """
+    一字涨停：涨停价封死且振幅极窄（近似 open=high=low=close）。
+    主板约 +10%、创业板/科创板约 +20%。
+    """
+    if idx < 1:
+        return False
+    close = df['close'].values.astype(float)
+    high = df['high'].values.astype(float) if 'high' in df.columns else close
+    low = df['low'].values.astype(float) if 'low' in df.columns else close
+    open_ = df['open'].values.astype(float) if 'open' in df.columns else close
+    c, h, lo, o = float(close[idx]), float(high[idx]), float(low[idx]), float(open_[idx])
+    prev_c = float(close[idx - 1])
+    if not all(np.isfinite(x) for x in (c, h, lo, o, prev_c)) or prev_c <= 0 or c <= 0:
+        return False
+    gain = c / prev_c - 1.0
+    if gain < 0.099 and gain < 0.199:
+        return False
+    if (h - lo) / c > flat_range_max_rel:
+        return False
+    if abs(c - o) / c > flat_range_max_rel:
+        return False
+    if c < h * (1.0 - 1e-4) or o < h * (1.0 - 1e-4):
+        return False
+    if lo < min(o, c) * (1.0 - flat_range_max_rel):
+        return False
+    return True
+
+
+def _heavy_volume_yin_bar(df, idx, prev_vol_mult=1.5):
+    """当日收阴且成交量 > 前一日成交量 × prev_vol_mult。"""
+    if idx < 1:
+        return False
+    close = df['close'].values.astype(float)
+    open_ = df['open'].values.astype(float) if 'open' in df.columns else close
+    vol = df['volume'].values.astype(float) if 'volume' in df.columns else None
+    if vol is None:
+        return False
+    if close[idx] >= open_[idx]:
+        return False
+    v_cur = float(vol[idx])
+    v_prev = float(vol[idx - 1])
+    if not (np.isfinite(v_cur) and np.isfinite(v_prev)) or v_prev <= 0:
+        return False
+    return v_cur > prev_vol_mult * v_prev
+
+
+@_register_mandatory_sell('高位放量阴线看跌')
+def mandatory_sell_high_heavy_bearish_pattern(df, idx):
+    """
+    接近历史前高压力带 + 放巨量阴线 → 必卖，不须等跌破 MA5/沿均线主升破位。
+    """
+    if not _near_high_pressure_zone_at_idx(df, idx):
+        return False
+    return _heavy_volume_yin_bar(df, idx)
+
+
+@_register_mandatory_sell('一字涨停次日放量阴')
+def mandatory_sell_after_yizi_limit_up_heavy_yin(df, idx):
+    """前一日一字涨停，次日放巨量阴线 → 必卖。"""
+    if idx < 1:
+        return False
+    if not _is_yizi_limit_up_bar(df, idx - 1):
+        return False
+    return _heavy_volume_yin_bar(df, idx)
+
+
 @_register_mandatory_buy('W底突破')
 def buy_double_bottom(df, idx):
     if idx < 30:
@@ -792,55 +892,19 @@ def sell_near_high_heavy_volume(df, idx):
     """
     历史压力位：历史上形成局部高点 P（压力带：P≥30 为 ±2 元，否则 ±2%），
     自该日起至昨日区间内最高价从未突破过压力带上沿；
-    当前进入压力带、近端阴线偏多、当日量≥20 日均量 2 倍且收阴。仅 V3 计入。
+    当前进入压力带、近端阴线偏多、当日收阴且成交量>前一日1.5倍。仅 V3 计入。
     """
-    if idx < 80:
+    if not _near_high_pressure_zone_at_idx(df, idx):
         return False
     close = df['close'].values.astype(float)
-    high = df['high'].values.astype(float) if 'high' in df.columns else close
-    low = df['low'].values.astype(float) if 'low' in df.columns else close
     open_ = df['open'].values.astype(float) if 'open' in df.columns else close
-    vol = df['volume'].values.astype(float) if 'volume' in df.columns else None
-    if vol is None:
-        return False
-    # 找历史压力位：约 25～220 根前的局部高点（5 日邻域最高）
-    pivot_i = None
-    pivot_p = -1.0
-    for i in range(idx - 25, max(10, idx - 220), -1):
-        if i < 5 or i + 5 > len(high):
-            continue
-        hh = float(high[i])
-        if hh < float(np.max(high[i - 5 : i + 6])) - 1e-9:
-            continue
-        zhi = (hh + 2.0) if hh >= 30.0 else hh * 1.02
-        if i + 1 < idx:
-            mx_after = float(np.max(high[i + 1 : idx]))
-            if mx_after >= zhi * (1.0 - 1e-9):
-                continue
-        pivot_i = i
-        pivot_p = hh
-        break
-    if pivot_i is None or pivot_p <= 0:
-        return False
-    # 压力带：高价股用 ±2 元，低价股用 ±2% 避免带宽过宽
-    if pivot_p >= 30.0:
-        zone_lo, zone_hi = pivot_p - 2.0, pivot_p + 2.0
-    else:
-        zone_lo, zone_hi = pivot_p * 0.98, pivot_p * 1.02
-    if high[idx] < zone_lo * 0.995:
-        return False
     n_yin = sum(
         1 for j in range(max(0, idx - 4), idx + 1)
         if close[j] < open_[j]
     )
     if n_yin < 3:
         return False
-    vol_ma = float(np.mean(vol[max(0, idx - 20) : idx]))
-    if vol_ma <= 0 or vol[idx] < 2.0 * vol_ma:
-        return False
-    if close[idx] >= open_[idx]:
-        return False
-    return True
+    return _heavy_volume_yin_bar(df, idx)
 
 
 @_register_buy_restriction('未突破5日线不买')
@@ -1043,10 +1107,11 @@ def buy_flag_breakout(df, idx):
     return False
 
 
-# 双针探底：近端两根及以上长下影针、低点相近；信号日为阳线
-_DOUBLE_NEEDLE_LOOKBACK = 6
-_DOUBLE_NEEDLE_MAX_GAP_BARS = 4
-_DOUBLE_NEEDLE_LOW_TOLERANCE = 0.025
+# 双针探底：第一根针在信号日前；第二根针=信号日；两针低点均为 V/W 底区最低价且相差<0.5%
+_DOUBLE_NEEDLE_LOOKBACK = 8
+_DOUBLE_NEEDLE_MAX_GAP_BARS = 5
+_DOUBLE_NEEDLE_PAIR_LOW_MAX_DIFF = 0.005
+_DOUBLE_NEEDLE_SIGNAL_MIN_SHADOW_BODY_RATIO = 0.8
 _DOUBLE_NEEDLE_MIN_SHADOW_RANGE_RATIO = 0.45
 _DOUBLE_NEEDLE_MIN_SHADOW_BODY_RATIO = 0.85
 
@@ -1071,25 +1136,88 @@ def _bar_is_lower_needle(o, h, l, c):
     return True
 
 
-def _yang_lower_shadow_over_body(o, h, l, c, min_ratio=1.0):
-    """阳线：下影线长度 / 实体 > min_ratio。"""
+def _lower_shadow_over_body_ratio(o, h, l, c, min_ratio=0.8):
+    """下影线长度 / 实体 >= min_ratio（阴/阳线均适用）。"""
     o, h, l, c = float(o), float(h), float(l), float(c)
-    if c <= o:
-        return False
     body = abs(c - o)
     lower = min(o, c) - l
     if lower <= 0:
         return False
     min_body = 1e-10 * max(abs(c), 1e-9)
     if body < min_body:
-        return lower > min_body * min_ratio
-    return (lower / body) > min_ratio
+        return lower >= min_body * min_ratio
+    return (lower / body) >= min_ratio
+
+
+def _yang_lower_shadow_over_body(o, h, l, c, min_ratio=1.0):
+    """阳线：下影线长度 / 实体 >= min_ratio。"""
+    o, h, l, c = float(o), float(h), float(l), float(c)
+    if c <= o:
+        return False
+    return _lower_shadow_over_body_ratio(o, h, l, c, min_ratio=min_ratio)
+
+
+def _v_bottom_zone_min_low(lows, left_idx, n):
+    """V/W 左底允许窗口内的最低价（双针低点须贴此底）。"""
+    from strategy_vw_bottle_backtest import (
+        DOUBLE_NEEDLE_LEFT_BOTTOM_MAX_AFTER,
+        DOUBLE_NEEDLE_LEFT_BOTTOM_MAX_BEFORE,
+    )
+    lo_i = max(0, int(left_idx) - int(DOUBLE_NEEDLE_LEFT_BOTTOM_MAX_BEFORE))
+    hi_i = min(n - 1, int(left_idx) + int(DOUBLE_NEEDLE_LEFT_BOTTOM_MAX_AFTER))
+    if hi_i < lo_i:
+        return None
+    seg = lows[lo_i : hi_i + 1]
+    if len(seg) == 0:
+        return None
+    return float(np.min(seg))
+
+
+def _low_at_v_bottom(low_val, v_bottom_low, tol=_DOUBLE_NEEDLE_PAIR_LOW_MAX_DIFF):
+    v_bottom_low = float(v_bottom_low)
+    if v_bottom_low <= 0:
+        return False
+    return abs(float(low_val) - v_bottom_low) / v_bottom_low <= tol
+
+
+def _double_needle_pair_ok(lows, j1, j2, v_bottom_low):
+    """两针低点均在 V/W 底区最低附近，且彼此相差 <0.5%；j2 为信号日（第二根针）。"""
+    if j2 - j1 > _DOUBLE_NEEDLE_MAX_GAP_BARS:
+        return False
+    low1, low2 = float(lows[j1]), float(lows[j2])
+    if not _low_at_v_bottom(low1, v_bottom_low):
+        return False
+    if not _low_at_v_bottom(low2, v_bottom_low):
+        return False
+    mid = (low1 + low2) / 2.0
+    if mid <= 0:
+        return False
+    return abs(low1 - low2) / mid <= _DOUBLE_NEEDLE_PAIR_LOW_MAX_DIFF
+
+
+def _find_first_needle_before_signal(o, h, l, c, start, signal_idx, v_bottom_low):
+    """第一根针在信号日前；多候选时取最近信号日的一根。"""
+    best_j1 = None
+    for j in range(start, signal_idx):
+        if not _bar_is_lower_needle(o[j], h[j], l[j], c[j]):
+            continue
+        if not _lower_shadow_over_body_ratio(
+            o[j], h[j], l[j], c[j],
+            min_ratio=_DOUBLE_NEEDLE_SIGNAL_MIN_SHADOW_BODY_RATIO,
+        ):
+            continue
+        if not _double_needle_pair_ok(l, j, signal_idx, v_bottom_low):
+            continue
+        if best_j1 is None or j > best_j1:
+            best_j1 = j
+    return best_j1
 
 
 def detect_double_needle_bottom(df, idx):
     """
-    双针探底：须在 V/W 左侧底部附近；跌段总跌幅>=10%；
-    近端两根探底针且低点相近；信号日为阳线且下影/实体>1。
+    双针探底：须在 V/W 左侧底部附近；跌段总跌幅>=4%；
+    第一根探底针在信号日前（下影/实体>=0.8），第二根针=信号日（阳线且下影/实体>=0.8）；
+    两针低点均为 V/W 底区最低价且彼此相差<0.5%。
     """
     if idx < 20:
         return False
@@ -1099,25 +1227,23 @@ def detect_double_needle_bottom(df, idx):
     l = df['low'].values.astype(float) if 'low' in df.columns else df['close'].values.astype(float)
     c = df['close'].values.astype(float)
     n = len(c)
-    if not signal_near_vw_left_bottom(c, h, l, n, idx):
+    ctx = signal_near_vw_left_bottom(c, h, l, n, idx)
+    if not ctx:
         return False
-    if not _yang_lower_shadow_over_body(o[idx], h[idx], l[idx], c[idx], min_ratio=1.0):
+    v_bottom_low = _v_bottom_zone_min_low(l, ctx['left_idx'], n)
+    if v_bottom_low is None:
+        return False
+    if not _bar_is_lower_needle(o[idx], h[idx], l[idx], c[idx]):
+        return False
+    if c[idx] <= o[idx]:
+        return False
+    if not _lower_shadow_over_body_ratio(
+        o[idx], h[idx], l[idx], c[idx],
+        min_ratio=_DOUBLE_NEEDLE_SIGNAL_MIN_SHADOW_BODY_RATIO,
+    ):
         return False
     start = max(0, idx - _DOUBLE_NEEDLE_LOOKBACK + 1)
-    needle_js = []
-    for j in range(start, idx + 1):
-        if _bar_is_lower_needle(o[j], h[j], l[j], c[j]):
-            needle_js.append(j)
-    if len(needle_js) < 2:
-        return False
-    j1, j2 = needle_js[-2], needle_js[-1]
-    if j2 - j1 > _DOUBLE_NEEDLE_MAX_GAP_BARS:
-        return False
-    low1, low2 = float(l[j1]), float(l[j2])
-    mid = (low1 + low2) / 2.0
-    if mid <= 0 or abs(low1 - low2) / mid > _DOUBLE_NEEDLE_LOW_TOLERANCE:
-        return False
-    return True
+    return _find_first_needle_before_signal(o, h, l, c, start, idx, v_bottom_low) is not None
 
 
 def confirm_double_needle_t1(df, confirm_idx):
@@ -1306,6 +1432,26 @@ BUY_STANDALONE_WEIGHTED_RULE_NAMES = frozenset({
     '横盘整理向上突破',
     '黄金坑',
     '双针探底',
+})
+
+# MACD / 价升量增：不得单独触发，须同日有看涨K线、形态学或突破类支持
+BUY_MACD_VP_REQUIRES_PATTERN_BREAKOUT = frozenset({
+    'MACD金叉',
+    'MACD底背离',
+    '价升量增',
+})
+
+BUY_PATTERN_BREAKOUT_SUPPORT_NAMES = frozenset({
+    '看涨K线形态',
+    '横盘整理向上突破',
+    '黄金坑',
+    'N字形突破',
+    '双针探底',
+    '放量突破高点',
+    'W底突破',
+    '头肩底突破',
+    'V反底部',
+    '旗形突破',
 })
 
 
@@ -2319,6 +2465,40 @@ def apply_all_buy_next_high_room_filter(
 apply_breakthrough_next_high_room_filter = apply_all_buy_next_high_room_filter
 
 
+def _idx_has_pattern_breakout_buy_support(buy_signals_pre, mandatory_buy_pre, idx, exclude_names=None):
+    """当日是否存在看涨K线、形态学或突破类买入支持（不含 exclude_names 自身）。"""
+    exclude = set(exclude_names or ())
+    for name, arr in (buy_signals_pre or {}).items():
+        if name in exclude or name not in BUY_PATTERN_BREAKOUT_SUPPORT_NAMES:
+            continue
+        if arr is not None and idx < len(arr) and bool(arr[idx]):
+            return True
+    for name, arr in (mandatory_buy_pre or {}).items():
+        if name in BUY_PATTERN_BREAKOUT_SUPPORT_NAMES:
+            if arr is not None and idx < len(arr) and bool(arr[idx]):
+                return True
+    return False
+
+
+def apply_macd_vp_requires_pattern_breakout_buy(
+    df, buy_signals_pre, buy_rules_map, start_offset, mandatory_buy_pre=None,
+):
+    """MACD金叉/底背离、价升量增须同日有看涨K线形态、形态学或突破，否则置 False。"""
+    n = len(df)
+    for name in BUY_MACD_VP_REQUIRES_PATTERN_BREAKOUT:
+        arr = buy_signals_pre.get(name) if buy_signals_pre else None
+        if arr is None:
+            continue
+        for idx in range(start_offset, n):
+            if not arr[idx]:
+                continue
+            if _idx_has_pattern_breakout_buy_support(
+                buy_signals_pre, mandatory_buy_pre, idx, exclude_names={name},
+            ):
+                continue
+            arr[idx] = False
+
+
 def apply_piercing_requires_confluence_buy(df, buy_signals_pre, buy_rules_map, start_offset,
                                            mandatory_buy_pre=None):
     """
@@ -2488,6 +2668,8 @@ def generate_signals_with_weights(df, buy_rules, buy_weights,
 
     apply_piercing_requires_confluence_buy(df, buy_rule_signals, buy_rules, start_offset,
                                            mandatory_buy_pre=mandatory_buy_signals)
+    apply_macd_vp_requires_pattern_breakout_buy(
+        df, buy_rule_signals, buy_rules, start_offset, mandatory_buy_pre=mandatory_buy_signals)
     apply_all_buy_next_high_room_filter(
         df, buy_rule_signals, buy_rules, start_offset, mandatory_buy_pre=mandatory_buy_signals)
 

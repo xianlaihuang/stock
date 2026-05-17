@@ -301,6 +301,8 @@ def optimize_weights_v2(df, buy_rules=None, sell_rules=None,
     mandatory_buy_signals = _precompute_rule_signals(df, dwe_v1.MANDATORY_BUY_RULES, start_offset=60)
     dwe_v1.apply_piercing_requires_confluence_buy(
         df, buy_rule_signals, buy_rules, 60, mandatory_buy_pre=mandatory_buy_signals)
+    dwe_v1.apply_macd_vp_requires_pattern_breakout_buy(
+        df, buy_rule_signals, buy_rules, 60, mandatory_buy_pre=mandatory_buy_signals)
     dwe_v1.apply_all_buy_next_high_room_filter(
         df, buy_rule_signals, buy_rules, 60, mandatory_buy_pre=mandatory_buy_signals)
     print(f"[V2] 规则信号表完成 (买入{len(buy_rules)}, 卖出{len(sell_rules)})")
@@ -616,6 +618,8 @@ def generate_signals_v2(df, buy_rules, buy_weights, sell_rules, sell_weights,
     sell_rule_signals = _precompute_rule_signals(df, sell_rules, start_offset)
     mandatory_buy_signals = _precompute_rule_signals(df, dwe_v1.MANDATORY_BUY_RULES, start_offset)
     dwe_v1.apply_piercing_requires_confluence_buy(
+        df, buy_rule_signals, buy_rules, start_offset, mandatory_buy_pre=mandatory_buy_signals)
+    dwe_v1.apply_macd_vp_requires_pattern_breakout_buy(
         df, buy_rule_signals, buy_rules, start_offset, mandatory_buy_pre=mandatory_buy_signals)
     dwe_v1.apply_all_buy_next_high_room_filter(
         df, buy_rule_signals, buy_rules, start_offset, mandatory_buy_pre=mandatory_buy_signals)

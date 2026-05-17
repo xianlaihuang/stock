@@ -546,6 +546,11 @@
             return `${code}_${period}`;
         }
 
+        /** 盘外且日线缓存已覆盖最近收盘日 → 不必 scrape / sync / 增量拉取 */
+        function shouldSkipExternalKlineFetch(code) {
+            return isShanghaiNonTrading() && isKlineDayCacheFreshForStock(code);
+        }
+
         /** 盘后：该周期缓存最后一根已不早于「应收到的最后一根交易日」则视为不必再拉 */
         function isPeriodCacheFreshForStock(code, period) {
             const key = getKlineCacheKey(code, period);
@@ -629,6 +634,7 @@
 
         async function refreshDayKlineCacheSilent() {
             if (!currentStock) return;
+            if (!isShanghaiAshareSession()) return;
             const code = currentStock.code;
             const key = getKlineCacheKey(code, 'day');
             const cached = klineCache[key];
@@ -802,7 +808,9 @@
             if (!hydrated) {
                 await loadKlineData();
                 await loadFinancialData();
-                autoScrapeLatestData(code);
+                if (!shouldSkipExternalKlineFetch(code)) {
+                    await autoScrapeLatestData(code);
+                }
             } else if (!financialCache[code] || !financialCache[code].length) {
                 await loadFinancialData();
             }
@@ -811,6 +819,7 @@
         }
 
         async function autoScrapeLatestData(code) {
+            if (shouldSkipExternalKlineFetch(code)) return;
             try {
                 const res = await fetch(`${API_BASE}/stocks/${code}/scrape`, { method: 'POST' });
                 const data = await res.json();
@@ -872,6 +881,9 @@
 
         async function fetchKlineTailForPeriod(period) {
             if (!currentStock) return;
+            if (isShanghaiNonTrading() && isPeriodCacheFreshForStock(currentStock.code, period)) {
+                return;
+            }
             const ck = getKlineCacheKey(currentStock.code, period);
             const cached = klineCache[ck] || [];
             const inSession = isShanghaiAshareSession();
@@ -1092,7 +1104,9 @@
             if (cached.length) {
                 currentKlines = cached;
                 renderKlineChart(currentKlines, { preserveDataZoom: false, resetViewport: true });
-                fetchKlineTailForPeriod(period);
+                if (!(isShanghaiNonTrading() && isPeriodCacheFreshForStock(currentStock.code, period))) {
+                    fetchKlineTailForPeriod(period);
+                }
             } else {
                 if (period === 'minute') {
                     currentKlines = [];

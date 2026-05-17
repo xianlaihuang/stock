@@ -196,9 +196,11 @@ def v2_analyze_signals():
 
     v2 = dual['v2']
     v3 = dual['v3']
+    v4 = dual.get('v4')
     depth = len(df)
     block2 = _engine_block_from_result(v2, depth)
     block3 = _engine_block_from_result(v3, depth)
+    block4 = _engine_block_from_result(v4, depth) if v4 else None
 
     arl.save_run_log(
         stock_code, 'analyze', success=True,
@@ -209,7 +211,7 @@ def v2_analyze_signals():
         depth_used=depth, start_date=start_date, end_date=end_date,
     )
 
-    return jsonify({
+    payload = {
         'success': True,
         'stock_code': stock_code,
         'today_buy': block2['today_buy'],
@@ -229,7 +231,9 @@ def v2_analyze_signals():
         'portfolio_sim': block2['portfolio_sim'],
         'v2': block2,
         'v3': block3,
-    })
+    }
+    payload['v4'] = block4
+    return jsonify(payload)
 
 
 @app.route('/api/v2/weights', methods=['GET'])
@@ -302,8 +306,9 @@ def v2_get_signals():
 
     sigs = cached.get('signals', [])
     sigs_v3 = cached.get('signals_v3')
+    sigs_v4 = cached.get('signals_v4')
 
-    if sigs_v3 is None and klines and len(klines) >= 30:
+    if (sigs_v3 is None or sigs_v4 is None) and klines and len(klines) >= 30:
         try:
             df = _klines_to_df(klines)
             cw = ev2.load_weights(stock_code)
@@ -318,14 +323,19 @@ def v2_get_signals():
             cached = ev2.load_signals(stock_code) or {}
             sigs = cached.get('signals', sigs)
             sigs_v3 = cached.get('signals_v3')
+            sigs_v4 = cached.get('signals_v4')
         except Exception:
             sigs_v3 = sigs_v3 or []
+            sigs_v4 = sigs_v4 or []
 
     if sigs_v3 is None:
         sigs_v3 = []
+    if sigs_v4 is None:
+        sigs_v4 = []
 
     port2 = cached.get('portfolio_v2') or ev2._portfolio_sim_from_paired(sigs)
     port3 = cached.get('portfolio_v3') or ev2._portfolio_sim_from_paired(sigs_v3)
+    port4 = cached.get('portfolio_v4') or ev2._portfolio_sim_from_paired(sigs_v4)
 
     pseudo_v2 = {
         'paired_signals': sigs,
@@ -357,11 +367,25 @@ def v2_get_signals():
 
     block2 = _engine_block_from_result(pseudo_v2, depth_used)
     block3 = _engine_block_from_result(pseudo_v3, depth_used)
+    pseudo_v4 = {
+        'paired_signals': sigs_v4,
+        'all_signals': sigs_v4,
+        'prd_metrics': {},
+        'summary': {
+            'total_signals': len(sigs_v4),
+            'buy_count': sum(1 for s in sigs_v4 if s.get('type') == 'B'),
+            'sell_count': sum(1 for s in sigs_v4 if s.get('type') == 'S'),
+        },
+        'portfolio_sim': port4,
+        'conditions': ev2.get_conditions(),
+        'rule_stats': {},
+    }
+    block4 = _engine_block_from_result(pseudo_v4, depth_used)
 
     buy_count = sum(1 for s in sigs if s.get('type') == 'B')
     sell_count = sum(1 for s in sigs if s.get('type') == 'S')
 
-    return jsonify({
+    payload = {
         'success': True,
         'exists': True,
         'stock_code': stock_code,
@@ -382,7 +406,10 @@ def v2_get_signals():
         'portfolio_sim': block2['portfolio_sim'],
         'v2': block2,
         'v3': block3,
-    })
+    }
+    if sigs_v4 is not None:
+        payload['v4'] = block4
+    return jsonify(payload)
 
 
 @app.route('/api/v2/conditions', methods=['GET'])

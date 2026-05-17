@@ -502,6 +502,8 @@ def _mark_bs_points(df, buy_rules, sell_rules, mandatory_buy_rules,
 
     dwe.apply_piercing_requires_confluence_buy(
         df, buy_signals_pre, buy_rules, start_offset, mandatory_buy_pre=mandatory_buy_pre)
+    dwe.apply_macd_vp_requires_pattern_breakout_buy(
+        df, buy_signals_pre, buy_rules, start_offset, mandatory_buy_pre=mandatory_buy_pre)
     dwe.apply_all_buy_next_high_room_filter(
         df, buy_signals_pre, buy_rules, start_offset, mandatory_buy_pre=mandatory_buy_pre)
 
@@ -760,7 +762,9 @@ def _mark_bs_points(df, buy_rules, sell_rules, mandatory_buy_rules,
             else:
                 trend_down = (ma20[idx] < ma20[idx - 1]) and (close[idx] < ma20[idx])
                 if candidate == 'B' and trend_down:
-                    if engine_mode == 'v3' and '黄金坑' in triggered_buy:
+                    if engine_mode == 'v3' and (
+                        '黄金坑' in triggered_buy or '双针探底' in triggered_buy
+                    ):
                         pass
                     else:
                         candidate = None
@@ -828,7 +832,12 @@ def _mark_bs_points(df, buy_rules, sell_rules, mandatory_buy_rules,
                 if engine_mode == 'v3':
                     mbuy = reasons.get('mandatory_buy_triggered', [])
                     bt = reasons.get('buy_triggered', [])
-                    if reasons.get('bullish_pattern_kind') == '看涨吞没':
+                    if '双针探底' in bt:
+                        pending_buy = (
+                            idx, reasons, confidence, level,
+                            {'v3_double_needle_pending': True},
+                        )
+                    elif reasons.get('bullish_pattern_kind') == '看涨吞没':
                         pending_buy = (
                             idx, reasons, confidence, level,
                             {'v3_engulf_pending': True},
@@ -852,11 +861,6 @@ def _mark_bs_points(df, buy_rules, sell_rules, mandatory_buy_rules,
                         pending_buy = (
                             idx, reasons, confidence, level,
                             {'v3_flag_pending': True},
-                        )
-                    elif '双针探底' in bt:
-                        pending_buy = (
-                            idx, reasons, confidence, level,
-                            {'v3_double_needle_pending': True},
                         )
                     else:
                         trade_history.append((idx, 'B'))
@@ -1427,15 +1431,15 @@ def get_conditions():
         ],
         'buy_sufficient': [
             {'name': '关键形态必买', 'description': 'W底突破、头肩底突破、V反底部、旗形突破；其中「V反底部」须收复左侧跌前参考高点一定比例（左侧压力取低点前最多5根K之最高）、若已站上MA20则须自低点以来出现过对MA20的回踩且收盘仍在其上，且排除连阳缩量链'},
-            {'name': '加权买入', 'description': '分组 cap 后 buy_score > sell_score 且 buy_score > 0；其中「看涨K线形态」在结果中附带 TA-Lib 子形态名（看涨吞没/晨星/锤头/刺透/晨十字/倒锤头，先命中为准）；子形态「刺透」为先命中时须同日共振：其它加权买入、必买、或同一根K上另有其它看涨子形态同时为真'},
-            {'name': '双针探底', 'description': '须在V/W左侧底部附近、跌段总跌幅≥10%；两根探底针+信号日阳线且下影/实体>1；T+1阳线且收盘>MA5确认B'},
+            {'name': '加权买入', 'description': '分组 cap 后 buy_score > sell_score 且 buy_score > 0；其中「看涨K线形态」在结果中附带 TA-Lib 子形态名；「刺透」须同日共振；「MACD金叉」「MACD底背离」「价升量增」须同日另有看涨K线形态、形态学（黄金坑/双针/N字等）或突破（含放量突破高点、必买形态）'},
+            {'name': '双针探底', 'description': '须在V/W左侧底部附近、跌段总跌幅≥4%；第一根针在信号日前(下影/实体>=0.8)，第二根针=信号日(阳线且下影/实体>=0.8)；两针低点均为V/W底区最低且相差<0.5%；T+1阳线且收盘>MA5确认B'},
             {'name': 'N字形突破', 'description': '不可单独脱离结构：须在最近 W底右侧 或 V反右侧 背景下，前高=右侧起点至信号日(含)的 high 最高值；曾触瓶口后 N 字回踩再突破（W 须 high 突破至昨前高，V 为瓶口回踩收阳），带量'},
         ],
         'sell_necessary': [
             {'name': '当前持仓', 'description': '最近一个信号为B'},
         ],
         'sell_sufficient': [
-            {'name': '关键形态必卖', 'description': 'M顶跌破、V反顶部、旗形跌破、均线趋势打破必卖'},
+            {'name': '关键形态必卖', 'description': 'M顶跌破、V反顶部、旗形跌破、均线趋势打破必卖；高位压力带+放巨量阴线（高位放量阴线看跌）立即必卖，不须等跌破5日线'},
             {'name': '沿均线主升破位', 'description': '识别主升贴 MA5/10/20 后首次跌破对应均线，计入卖出规则加权分（需满足计数卖等条件）'},
             {'name': '计数卖出', 'description': '≥2条卖出规则触发且sell_score > buy_score；浮亏超阈值时降为1条'},
             {'name': '黄昏星缩量过滤', 'description': '「看跌K线形态」子形态为黄昏星时：若前一日为阳线(收盘>开盘)且当日成交量小于前一日，则不因该形态触发卖出（其它卖出规则仍可S）'},
