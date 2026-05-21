@@ -1,7 +1,8 @@
+import re
 import requests
 import json
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from bs4 import BeautifulSoup
 
 
@@ -321,7 +322,10 @@ class StockScraper:
                 if len(parts) < 7:
                     continue
                 try:
-                    time_str = parts[0]
+                    time_str = parts[0].strip()
+                    if time_str and not re.match(r'\d{4}-\d{2}-\d{2}', time_str):
+                        cn_today = datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d')
+                        time_str = f'{cn_today} {time_str}'
                     price = float(parts[1])
                     vol = int(float(parts[5]))
                     amount = float(parts[6]) if len(parts) > 6 else 0

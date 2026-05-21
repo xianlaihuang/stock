@@ -197,15 +197,21 @@ _BULLISH_CANDLE_DEFS = (
     ('CDLMORNINGDOJISTAR', '晨十字'),
     ('CDLINVERTEDHAMMER', '倒锤头'),
 )
-BEARISH_CANDLE_EVENING_STAR_CN = '黄昏星'
+from v4_aggressive.bearish_candle_modes import (
+    MA5_BREAK_SELL_REASON as V4_BEARISH_MA5_BREAK_SELL_REASON,
+    MA5_DEFER_KINDS as BEARISH_CANDLE_MA5_DEFER_KINDS,
+    detect_bearish_kind,
+    close_broke_below_ma5,
+    close_still_on_ma5,
+    bearish_kind_defers_sell_until_ma5_break,
+    sell_bearish_pattern_at,
+)
 
+# 默认 slim：不含黄昏星/黄昏十字/射击之星
 _BEARISH_CANDLE_DEFS = (
     ('CDLENGULFING', '看跌吞没'),
-    ('CDLEVENINGSTAR', BEARISH_CANDLE_EVENING_STAR_CN),
     ('CDLHANGINGMAN', '上吊线'),
     ('CDLDARKCLOUDCOVER', '乌云盖顶'),
-    ('CDLEVENINGDOJISTAR', '黄昏十字'),
-    ('CDLSHOOTINGSTAR', '射击之星'),
 )
 
 
@@ -252,25 +258,9 @@ def detect_bullish_candle_pattern_labels_at_bar(df, idx):
     return frozenset(out)
 
 
-def detect_bearish_candle_pattern_kind(df, idx):
-    """返回当日 TA-Lib 识别的看跌子形态中文名；未识别则 None。"""
-    if idx < 3:
-        return None
-    o = df['open'].iloc[:idx + 1].values.astype(float)
-    h = df['high'].iloc[:idx + 1].values.astype(float)
-    l = df['low'].iloc[:idx + 1].values.astype(float)
-    c = df['close'].iloc[:idx + 1].values.astype(float)
-    for pname, label in _BEARISH_CANDLE_DEFS:
-        func = getattr(talib, pname, None)
-        if func is None:
-            continue
-        try:
-            result = func(o, h, l, c)
-            if len(result) > 0 and result[-1] == -100:
-                return label
-        except Exception:
-            pass
-    return None
+def detect_bearish_candle_pattern_kind(df, idx, mode='slim'):
+    """返回当日 TA-Lib 识别的看跌子形态中文名；默认 slim（无黄昏星/十字/射击之星）。"""
+    return detect_bearish_kind(df, idx, mode)
 
 
 @_register_buy('看涨K线形态')
@@ -278,48 +268,9 @@ def buy_bullish_pattern(df, idx):
     return detect_bullish_candle_pattern_kind(df, idx) is not None
 
 
-def evening_star_prev_yang_shrink_vol(df, idx):
-    """黄昏星信号日：前一日为阳线且当日成交量小于前一日（弱化见顶，不触发卖出）。"""
-    if idx < 1:
-        return False
-    try:
-        o_prev = float(df['open'].iloc[idx - 1])
-        c_prev = float(df['close'].iloc[idx - 1])
-    except Exception:
-        return False
-    if not (np.isfinite(o_prev) and np.isfinite(c_prev)) or c_prev <= o_prev:
-        return False
-    if 'volume' not in df.columns:
-        return False
-    try:
-        v_cur = float(df['volume'].iloc[idx])
-        v_prev = float(df['volume'].iloc[idx - 1])
-    except Exception:
-        return False
-    if not (np.isfinite(v_cur) and np.isfinite(v_prev)) or v_prev <= 0:
-        return False
-    return v_cur < v_prev
-
-
-def evening_star_shrink_after_yang_vetoes_sell(df, idx):
-    """TA-Lib 黄昏星且前一日阳线、当日缩量时，不因「看跌K线形态」计入卖出。"""
-    if detect_bearish_candle_pattern_kind(df, idx) != BEARISH_CANDLE_EVENING_STAR_CN:
-        return False
-    return evening_star_prev_yang_shrink_vol(df, idx)
-
-
 @_register_sell('看跌K线形态')
 def sell_bearish_pattern(df, idx):
-    kind = detect_bearish_candle_pattern_kind(df, idx)
-    if kind is None:
-        return False
-    if kind == '上吊线':
-        from v4_aggressive.bearish_candle_modes import close_above_ma20
-        if not close_above_ma20(df, idx):
-            return False
-    if kind == BEARISH_CANDLE_EVENING_STAR_CN and evening_star_prev_yang_shrink_vol(df, idx):
-        return False
-    return True
+    return sell_bearish_pattern_at(df, idx, mode='slim')
 
 
 def _near_high_pressure_zone_at_idx(df, idx, pivot_min_bars=25, pivot_max_bars=220):
@@ -478,40 +429,16 @@ def buy_double_bottom(df, idx):
 
 @_register_mandatory_sell('M顶跌破')
 def sell_double_top(df, idx):
+    """M 顶跌破：ATR 摆动高点双顶 + 跌破顶部 98%（与 V 结构同 registry）。"""
     if idx < 30:
         return False
-    close = df['close'].iloc[:idx+1].values.astype(float)
-    high = df['high'].iloc[:idx+1].values.astype(float) if 'high' in df.columns else close
-    n = len(close)
-    highs = []
-    for i in range(8, n):
-        if high[i] == high[max(0, i-8):min(n, i+4)].max():
-            highs.append(i)
-    filtered_highs = [highs[0]] if highs else []
-    for i in range(1, len(highs)):
-        if highs[i] - filtered_highs[-1] >= 5:
-            filtered_highs.append(highs[i])
-    for i in range(len(filtered_highs) - 1):
-        idx1, idx2 = filtered_highs[i], filtered_highs[i + 1]
-        if idx2 - idx1 < 10 or idx2 - idx1 > 60:
-            continue
-        p1, p2 = high[idx1], high[idx2]
-        if abs(p1 - p2) / max(p1, p2) > 0.02:
-            continue
-        between_low = close[idx1:idx2+1].min()
-        retrace = (max(p1, p2) - between_low) / max(p1, p2)
-        if retrace < 0.03:
-            continue
-        top_price = max(p1, p2)
-        breakout_end = min(idx2 + 30, n)
-        breakout_start = idx2 + 1
-        for j in range(breakout_start, breakout_end):
-            if close[j] < top_price * 0.98 and j == idx:
-                if j > 0 and close[j-1] >= top_price * 0.98:
-                    return True
-                elif j == breakout_start:
-                    return True
-    return False
+    close = df['close'].values.astype(float)
+    high = df['high'].values.astype(float) if 'high' in df.columns else close
+    low = df['low'].values.astype(float) if 'low' in df.columns else close
+    open_ = df['open'].values.astype(float) if 'open' in df.columns else close
+    from v4_aggressive.v4_structure_curves import get_structure_registry
+    reg = get_structure_registry(open_, high, low, close, len(close))
+    return reg.is_m_top_break_bar(idx)
 
 
 @_register_mandatory_buy('头肩底突破')
@@ -542,7 +469,7 @@ def buy_head_shoulders_bottom(df, idx):
 
 @_register_sell('头肩顶跌破')
 def sell_head_shoulders_top(df, idx):
-    """与 V4 一致：ATR 摆动头肩顶，仅首次跌破颈线日。"""
+    """头肩顶：high 曲线 ATR 摆动肩/头/肩，颈线=两肩间 low 最小，仅首次收盘跌破颈线日（同 M 顶 registry）。"""
     if idx < 50:
         return False
     close = df['close'].values.astype(float)
@@ -1043,52 +970,16 @@ def buy_v_reversal_bottom(df, idx):
 
 @_register_mandatory_sell('V反顶部')
 def sell_v_reversal_top(df, idx):
-    """左侧拉升、明确局部高点、右侧回落；排除「窗口内震荡高点+当日阴线」的假 V 顶。"""
+    """V 反顶部：摆动高点 + 左侧均价抬升 + 右侧回落跌破（与 V 底同 registry）。"""
     if idx < 20:
         return False
     close = df['close'].values.astype(float)
     high = df['high'].values.astype(float) if 'high' in df.columns else close
     low = df['low'].values.astype(float) if 'low' in df.columns else close
-    vol = df['volume'].values.astype(float) if 'volume' in df.columns else None
-    n = len(close)
-    lookback = min(20, idx)
-    if lookback < 8:
-        return False
-    # 峰值仅在过去窗口内取，不含当日，避免把当日上影误当「已见顶回落」
-    window_high = high[idx - lookback:idx]
-    if window_high.size < 6:
-        return False
-    rel_peak = int(np.argmax(window_high))
-    recent_high_idx = idx - lookback + rel_peak
-    if recent_high_idx >= idx - 3:
-        return False
-    if recent_high_idx < idx - 10:
-        return False
-    high_price = float(high[recent_high_idx])
-    lo = max(0, recent_high_idx - 2)
-    hi = min(n, recent_high_idx + 3)
-    if high_price + 1e-12 < float(np.max(high[lo:hi])):
-        return False
-    left_start = max(0, recent_high_idx - 10)
-    left_low = float(close[left_start:recent_high_idx].min())
-    if left_low <= 0:
-        return False
-    rise_pct = (high_price - left_low) / left_low
-    if rise_pct < 0.07:
-        return False
-    trail_low = float(low[recent_high_idx:idx + 1].min())
-    drop_from_peak = (high_price - trail_low) / high_price
-    if drop_from_peak < 0.03:
-        return False
-    if close[idx] > high_price * 0.98:
-        return False
-    if close[idx] >= close[idx - 1]:
-        return False
-    if vol is not None:
-        vol_ma5 = np.mean(vol[max(0, idx - 5):idx])
-        if vol_ma5 > 0 and vol[idx] < vol_ma5 * 0.8:
-            return False
-    return True
+    open_ = df['open'].values.astype(float) if 'open' in df.columns else close
+    from v4_aggressive.v4_structure_curves import get_structure_registry
+    reg = get_structure_registry(open_, high, low, close, len(close))
+    return reg.is_v_top_break_bar(idx)
 
 
 @_register_mandatory_buy('旗形突破')

@@ -74,6 +74,22 @@ class KlineData:
         result = kline_collection.delete_many(query)
         return result.deleted_count
 
+    @staticmethod
+    def delete_for_calendar_days(code, period, day_prefixes):
+        """按交易日前缀删除（分时 date 形如 YYYY-MM-DD HH:MM:SS）。"""
+        deleted = 0
+        for day in day_prefixes or []:
+            d = str(day).strip()[:10]
+            if len(d) < 10:
+                continue
+            r = kline_collection.delete_many({
+                'code': code,
+                'period': period,
+                'date': {'$regex': f'^{d}'},
+            })
+            deleted += r.deleted_count
+        return deleted
+
 class FinancialData:
     @staticmethod
     def add(code, data):

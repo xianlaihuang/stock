@@ -114,7 +114,14 @@
         .run-log-summary { background: #1e1e36; border: 1px solid #2a2a4a; border-radius: 8px; padding: 12px 16px; margin-bottom: 14px; font-size: 13px; line-height: 1.7; color: #bbb; }
         .run-log-summary strong { color: #fff; }
         .run-log-table-wrap { overflow-x: auto; }
-        .run-log-table { width: 100%; border-collapse: collapse; font-size: 12px; min-width: 1100px; }
+        .run-log-table { width: 100%; border-collapse: collapse; font-size: 12px; min-width: 1500px; }
+        .engine-rules-collapse { display: none; margin-bottom: 12px; padding: 0 14px 12px; background: #1e1e36; border-radius: 8px; border: 1px solid #2a2a4a; font-size: 12px; line-height: 1.55; }
+        .engine-rules-collapse[open] { padding-top: 4px; }
+        .engine-rules-collapse > summary { cursor: pointer; color: #4a90d9; font-weight: 600; padding: 10px 0; list-style: none; user-select: none; }
+        .engine-rules-collapse > summary::-webkit-details-marker { display: none; }
+        .engine-rules-collapse > summary::before { content: '▸ '; color: #888; }
+        .engine-rules-collapse[open] > summary::before { content: '▾ '; }
+        #engineRulesBody { color: #bbb; padding-top: 4px; }
         .run-log-table th, .run-log-table td { padding: 8px 10px; border: 1px solid #2a2a4a; text-align: right; white-space: nowrap; }
         .run-log-table th { background: #2a2a4a; color: #aaa; font-weight: 500; position: sticky; top: 0; z-index: 1; }
         .run-log-table td:first-child, .run-log-table th:first-child,
@@ -124,6 +131,26 @@
         .run-log-ret-pos { color: #ef5350; }
         .run-log-ret-neg { color: #27ae60; }
         .run-log-filter-label { display: flex; align-items: center; gap: 6px; font-size: 13px; color: #888; cursor: pointer; }
+
+        .pool-log-nav-btn { width: 100%; margin-top: 8px; }
+        .pool-log-page { display: none; }
+        .pool-log-page.active { display: block; }
+        .pool-log-table { width: 100%; border-collapse: collapse; font-size: 12px; min-width: 1100px; }
+        .pool-log-table th, .pool-log-table td { padding: 8px 10px; border: 1px solid #2a2a4a; text-align: right; white-space: nowrap; }
+        .pool-log-table th { background: #2a2a4a; color: #aaa; position: sticky; top: 0; z-index: 1; }
+        .pool-log-table td:first-child, .pool-log-table th:first-child,
+        .pool-log-table td:nth-child(2), .pool-log-table th:nth-child(2) { text-align: left; }
+        .pool-log-table tbody tr { cursor: pointer; }
+        .pool-log-table tbody tr:hover td { background: #22224a; }
+        .pool-log-table .pool-actions { cursor: default; }
+        .pool-log-table .pool-actions button { margin-right: 4px; font-size: 11px; padding: 4px 8px; }
+        .pool-log-sort-hint { color: #666; font-size: 12px; }
+        .pool-history-group { margin-bottom: 12px; border: 1px solid #2a2a4a; border-radius: 8px; background: #1e1e36; }
+        .pool-history-group > summary { cursor: pointer; padding: 10px 14px; color: #4a90d9; font-weight: 600; font-size: 13px; list-style: none; user-select: none; }
+        .pool-history-group > summary::-webkit-details-marker { display: none; }
+        .pool-history-group > summary::before { content: '▸ '; color: #888; }
+        .pool-history-group[open] > summary::before { content: '▾ '; }
+        .pool-history-group .pool-history-table-wrap { padding: 0 8px 10px; overflow-x: auto; }
     </style>
 </head>
 <body>
@@ -147,6 +174,7 @@
                 <ul class="stock-list" id="stockList">
                     <li class="empty-state">暂无股票</li>
                 </ul>
+                <button type="button" class="btn btn-primary pool-log-nav-btn" onclick="showPoolReturnLogPage()">总收益日志</button>
             </div>
         </div>
         
@@ -219,7 +247,12 @@
                             <span style="color: #888; font-size: 12px;">规则版本：</span>
                             <button type="button" class="period-btn active" id="engineTabV2" onclick="switchAnalysisEngine('v2')">V2 谨慎</button>
                             <button type="button" class="period-btn" id="engineTabV3" onclick="switchAnalysisEngine('v3')">V3 进取</button>
+                            <button type="button" class="period-btn" id="engineTabV4" onclick="switchAnalysisEngine('v4')" style="display:none;">V4 激进</button>
                         </div>
+                        <details id="engineRulesPanel" class="engine-rules-collapse">
+                            <summary id="engineRulesSummary">买入 / 卖出规则说明（点击展开）</summary>
+                            <div id="engineRulesBody"></div>
+                        </details>
                         <div id="analysisResult" class="empty-state">先在「公式计算」中计算权重，再点击「运行分析」</div>
                         <div id="signalChartContainer" style="height: 500px; width: 100%; margin-top: 16px; display: none;"></div>
                     </div>
@@ -269,7 +302,33 @@
             
             <div id="emptyState" class="empty-state">
                 <div style="font-size: 48px; margin-bottom: 16px;">📊</div>
-                <p>请从左侧添加或选择股票</p>
+                <p>请从左侧添加或选择股票，或打开「总收益日志」查看股票池汇总</p>
+            </div>
+
+            <div id="poolReturnLogPage" class="pool-log-page card">
+                <div class="card-title">股票池 · 总收益日志</div>
+                <p style="color:#888;font-size:13px;margin-bottom:12px;line-height:1.6;">
+                    汇总股票池<strong>历次「公式计算 + 运行分析」</strong>记录。Δ列为<strong>最近一次相对上一执行</strong>的收益变化，用于对比买卖规则/权重调整后的效果（模拟资金 100 万复利）。
+                </p>
+                <div class="run-log-toolbar">
+                    <button type="button" class="btn btn-primary" style="font-size:12px;padding:6px 12px;" onclick="loadPoolReturnLog()">刷新</button>
+                    <button type="button" class="btn btn-success" id="poolBatchRunBtn" style="font-size:12px;padding:6px 12px;" onclick="poolBatchRun()">批量公式+分析</button>
+                    <label class="run-log-filter-label">
+                        <input type="checkbox" id="poolRunWeights" checked>
+                        公式计算
+                    </label>
+                    <label class="run-log-filter-label">
+                        <input type="checkbox" id="poolRunAnalyze" checked>
+                        运行分析
+                    </label>
+                    <span class="run-log-filter-label" style="cursor:default;">历次记录：每只股票固定最近 10 条（时间倒序）</span>
+                    <span class="pool-log-sort-hint">汇总表可点 V2/V3/V4 排序</span>
+                </div>
+                <div id="poolLogSummary" class="run-log-summary" style="display:none;"></div>
+                <div class="card-title" style="margin-top:8px;font-size:14px;">最新汇总（含相对上一执行 Δ）</div>
+                <div id="poolLogTableWrap" class="run-log-table-wrap empty-state">加载中…</div>
+                <div class="card-title" style="margin-top:16px;font-size:14px;">历次执行记录（按股票分组）</div>
+                <div id="poolTimelineWrap" class="run-log-table-wrap empty-state">加载中…</div>
             </div>
         </div>
     </div>
@@ -370,11 +429,11 @@
             return false;
         }
 
-        /** 日 K 最后一根「应已收盘」的交易日（简化：不含节假日休市表） */
+        /** 日 K 最后一根「应已收盘」的交易日（简化：不含节假日休市表）；盘中为当日 */
         function getExpectedLastDailyBarDateStrCN() {
             const { y, mo, da, wd, mins } = getShanghaiCalendarParts();
             const inSession = wd >= 1 && wd <= 5 && mins >= 9 * 60 + 30 && mins < 15 * 60;
-            if (inSession) return '';
+            if (inSession) return shanghaiYmdFromParts();
             let cur = new Date(y, mo - 1, da);
             if (wd === 0) cur.setDate(cur.getDate() - 2);
             else if (wd === 6) cur.setDate(cur.getDate() - 1);
@@ -551,14 +610,52 @@
             return isShanghaiNonTrading() && isKlineDayCacheFreshForStock(code);
         }
 
-        /** 盘后：该周期缓存最后一根已不早于「应收到的最后一根交易日」则视为不必再拉 */
+        /** 分时缓存是否能在主图上画出至少一个点（避免「有缓存但全被日期过滤」仍视为新鲜） */
+        function minuteBundleHasPoints(cached) {
+            if (!cached || !cached.length) return false;
+            const b = buildMinuteSessionBundle(cached, getMinuteChartTargetYmd());
+            return (b.closes || []).some(c => c != null && c !== '' && isFinite(Number(c)));
+        }
+
+        /** 本地缓存是否可直接画主图（不要求「已是最新」） */
+        function hasPeriodCacheToDisplay(code, period) {
+            const key = getKlineCacheKey(code, period);
+            const arr = klineCache[key];
+            if (!arr || !arr.length) return false;
+            if (period === 'minute') {
+                const target = getMinuteChartTargetYmd();
+                if (!target) return false;
+                return arr.some(k => normalizeKlineDateYmd(k.date) === target) && minuteBundleHasPoints(arr);
+            }
+            return true;
+        }
+
+        function applyCachedKlineToChart(code, period, opts) {
+            opts = opts || {};
+            const key = getKlineCacheKey(code, period);
+            const arr = klineCache[key];
+            if (!hasPeriodCacheToDisplay(code, period)) return false;
+            currentKlines = arr;
+            if (period === currentPeriod) {
+                renderKlineChart(currentKlines, {
+                    preserveDataZoom: !!opts.preserveDataZoom,
+                    preservedZoomOverride: opts.preservedZoomOverride || null,
+                    resetViewport: !!opts.resetViewport,
+                });
+            }
+            return true;
+        }
+
+        /** 该周期缓存最后一根已不早于「应收到的最后一根交易日」则视为不必再拉 */
         function isPeriodCacheFreshForStock(code, period) {
             const key = getKlineCacheKey(code, period);
             const arr = klineCache[key];
             if (!arr || !arr.length) return false;
             if (period === 'minute') {
-                if (isShanghaiAshareSession()) return false;
-                return true;
+                const target = getMinuteChartTargetYmd();
+                if (!target) return false;
+                const hasDay = arr.some(k => normalizeKlineDateYmd(k.date) === target);
+                return hasDay && minuteBundleHasPoints(arr);
             }
             const exp = getExpectedLastDailyBarDateStrCN();
             if (!exp) return false;
@@ -784,6 +881,8 @@
             document.getElementById('currentStockName').textContent = ` - ${name}`;
             document.getElementById('stockDetail').style.display = 'block';
             document.getElementById('emptyState').style.display = 'none';
+            const poolPage = document.getElementById('poolReturnLogPage');
+            if (poolPage) poolPage.classList.remove('active');
 
             weightsCalculated = false;
             currentAllSignals = [];
@@ -801,14 +900,22 @@
             currentKlines = [];
             currentPeriod = 'day';
             syncChartPeriodUI('day');
-            // 保留 klineCache / financialCache（按 code 分键），便于盘后切换回已看过的股票时不再重复拉 K 线、财务
+            // 保留 klineCache / financialCache（按 code 分键）；切换股票时先画缓存，再增量更新
 
             showTab('chart');
+            applyCachedKlineToChart(code, 'day', { resetViewport: true });
             const hydrated = hydrateStockFromCacheAfterHours(code);
             if (!hydrated) {
-                await loadKlineData();
+                await loadKlineData('day', {
+                    silent: hasPeriodCacheToDisplay(code, 'day'),
+                    preferIncremental: true,
+                    preserveDataZoom: false,
+                    resetViewport: !hasPeriodCacheToDisplay(code, 'day'),
+                });
                 await loadFinancialData();
-                if (!shouldSkipExternalKlineFetch(code)) {
+                if (isShanghaiAshareSession()) {
+                    await loadKlineDataSilent('day');
+                } else if (!shouldSkipExternalKlineFetch(code)) {
                     await autoScrapeLatestData(code);
                 }
             } else if (!financialCache[code] || !financialCache[code].length) {
@@ -954,6 +1061,16 @@
                 return;
             }
 
+            if (period === currentPeriod && hasPeriodCacheToDisplay(currentStock.code, period)
+                && !opts.skipCachePaint) {
+                currentKlines = cached;
+                renderKlineChart(cached, {
+                    preserveDataZoom: !!opts.preserveDataZoom,
+                    preservedZoomOverride: opts.preservedZoomOverride,
+                    resetViewport: !!opts.resetViewport,
+                });
+            }
+
             let url = `${API_BASE}/stocks/${currentStock.code}/kline?period=${period}`;
             if (period === 'minute') {
                 const td = getMinuteChartTargetYmd();
@@ -988,6 +1105,10 @@
                         klines = filterMinuteToSingleDay(klines, td);
                     }
                     if (klines.length === 0) {
+                        if (period === currentPeriod && cached && cached.length
+                            && (period !== 'minute' || minuteBundleHasPoints(cached))) {
+                            return;
+                        }
                         if (!silent && period === currentPeriod) {
                             currentKlines = [];
                             clearKlineChart();
@@ -1021,6 +1142,10 @@
                     && cached && cached.length && url.indexOf('after=') >= 0) {
                     return;
                 } else {
+                    if (period === currentPeriod && cached && cached.length
+                        && (period !== 'minute' || minuteBundleHasPoints(cached))) {
+                        return;
+                    }
                     if (!silent && period === currentPeriod) {
                         currentKlines = [];
                         clearKlineChart();
@@ -1028,6 +1153,10 @@
                     }
                 }
             } catch (e) {
+                if (period === currentPeriod && cached && cached.length
+                    && (period !== 'minute' || minuteBundleHasPoints(cached))) {
+                    return;
+                }
                 if (!silent && period === currentPeriod) showToast('K线加载失败', 'error');
             }
         }
@@ -1090,37 +1219,35 @@
                 startAutoRefresh();
                 return;
             }
-            const useCache = isShanghaiNonTrading()
-                && isPeriodCacheFreshForStock(currentStock.code, period);
             const ck = getKlineCacheKey(currentStock.code, period);
             const cached = klineCache[ck] || [];
-            if (useCache && cached.length) {
+            const canShowCache = hasPeriodCacheToDisplay(currentStock.code, period);
+            const fresh = isPeriodCacheFreshForStock(currentStock.code, period);
+            if (isShanghaiNonTrading() && fresh && canShowCache) {
                 currentKlines = cached;
                 renderKlineChart(currentKlines, { preserveDataZoom: false });
                 startAutoRefresh();
                 requestAnimationFrame(() => resizeKlineChartIfVisible());
                 return;
             }
-            if (cached.length) {
+            if (canShowCache) {
                 currentKlines = cached;
                 renderKlineChart(currentKlines, { preserveDataZoom: false, resetViewport: true });
-                if (!(isShanghaiNonTrading() && isPeriodCacheFreshForStock(currentStock.code, period))) {
+                if (!fresh) {
                     fetchKlineTailForPeriod(period);
                 }
-            } else {
-                if (period === 'minute') {
-                    currentKlines = [];
-                    renderKlineChart([], { resetViewport: true });
-                }
-                loadKlineData(period, {
-                    silent: false,
-                    preferIncremental: false,
-                    preserveDataZoom: false,
-                    resetViewport: true,
-                }).then(() => {
-                    requestAnimationFrame(() => resizeKlineChartIfVisible());
-                });
+                startAutoRefresh();
+                requestAnimationFrame(() => resizeKlineChartIfVisible());
+                return;
             }
+            loadKlineData(period, {
+                silent: false,
+                preferIncremental: true,
+                preserveDataZoom: false,
+                resetViewport: true,
+            }).then(() => {
+                requestAnimationFrame(() => resizeKlineChartIfVisible());
+            });
             startAutoRefresh();
             requestAnimationFrame(() => resizeKlineChartIfVisible());
         }
@@ -1909,11 +2036,33 @@
         let currentEngineTab = 'v2';
         let weightsCalculated = false;
 
+        const V4_V_REV_MARK_COLORS = {
+            'V反右侧': '#9b59b6',
+            'V反激进底-金针': '#e74c3c',
+            'V反激进底-止跌': '#1abc9c',
+            'V反激进底-大低开阳': '#f39c12',
+            'V4V反吞没': '#3498db',
+        };
+
+        function hasEngineBundle(d) {
+            return !!(d && d.v2 && d.v3);
+        }
+
+        function getEngineVerLabel(data) {
+            const d = data !== undefined && data !== null ? data : lastAnalyzeBundle;
+            if (!hasEngineBundle(d)) return 'V2';
+            if (currentEngineTab === 'v4' && d.v4) return 'V4';
+            if (currentEngineTab === 'v3') return 'V3';
+            return 'V2';
+        }
+
         function getActiveEngineBlock(data) {
             const d = data !== undefined && data !== null ? data : lastAnalyzeBundle;
             if (!d) return null;
-            if (d.v2 && d.v3) {
-                return currentEngineTab === 'v3' ? d.v3 : d.v2;
+            if (hasEngineBundle(d)) {
+                if (currentEngineTab === 'v4' && d.v4) return d.v4;
+                if (currentEngineTab === 'v3') return d.v3;
+                return d.v2;
             }
             return d;
         }
@@ -1925,15 +2074,90 @@
             }
         }
 
-        function switchAnalysisEngine(tab) {
-            if (tab !== 'v2' && tab !== 'v3') return;
-            currentEngineTab = tab;
+        function updateEngineTabButtons(data) {
+            const d = data || lastAnalyzeBundle;
             const v2b = document.getElementById('engineTabV2');
             const v3b = document.getElementById('engineTabV3');
-            if (v2b && v3b) {
-                v2b.classList.toggle('active', tab === 'v2');
-                v3b.classList.toggle('active', tab === 'v3');
+            const v4b = document.getElementById('engineTabV4');
+            if (v2b) v2b.classList.toggle('active', currentEngineTab === 'v2');
+            if (v3b) v3b.classList.toggle('active', currentEngineTab === 'v3');
+            if (v4b) {
+                v4b.style.display = (d && d.v4) ? '' : 'none';
+                v4b.classList.toggle('active', currentEngineTab === 'v4');
+                if (currentEngineTab === 'v4' && !d.v4) currentEngineTab = 'v2';
             }
+        }
+
+        function showEngineVersionTabs(data) {
+            const evTabs = document.getElementById('engineVersionTabs');
+            if (!evTabs) return;
+            if (hasEngineBundle(data)) {
+                evTabs.style.display = 'flex';
+                updateEngineTabButtons(data);
+            } else {
+                evTabs.style.display = 'none';
+            }
+        }
+
+        function renderEngineRulesPanel(data) {
+            const panel = document.getElementById('engineRulesPanel');
+            const body = document.getElementById('engineRulesBody');
+            const summaryEl = document.getElementById('engineRulesSummary');
+            if (!panel || !body) return;
+            const blk = getActiveEngineBlock(data);
+            const cond = blk && blk.conditions;
+            if (!cond) {
+                panel.style.display = 'none';
+                panel.removeAttribute('open');
+                body.innerHTML = '';
+                return;
+            }
+            const ver = getEngineVerLabel(data);
+            if (summaryEl) {
+                summaryEl.textContent = `${ver} 买入 / 卖出规则说明（点击展开）`;
+            }
+            const sections = [
+                ['买入必要条件', 'buy_necessary', '#ef5350'],
+                ['买入充分条件', 'buy_sufficient', '#e67e22'],
+                ['卖出必要条件', 'sell_necessary', '#27ae60'],
+                ['卖出充分条件', 'sell_sufficient', '#2ecc71'],
+                ['优化目标', 'optimization', '#4a90d9'],
+            ];
+            let html = '';
+            if (ver === 'V4') {
+                html += '<div style="margin-bottom:8px;color:#888;">V4 四类 V 反买入图例：';
+                Object.entries(V4_V_REV_MARK_COLORS).forEach(([name, color]) => {
+                    html += `<span style="margin-right:10px;"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${color};margin-right:4px;"></span>${name}</span>`;
+                });
+                html += '</div>';
+            }
+            sections.forEach(([title, key, color]) => {
+                const items = cond[key] || [];
+                if (!items.length) return;
+                html += `<div style="margin-top:10px;color:${color};font-weight:600;">${title}</div><ul style="margin:4px 0 0 18px;padding:0;color:#bbb;">`;
+                items.forEach(it => {
+                    html += `<li style="margin-bottom:4px;"><span style="color:#ddd;">${it.name}</span> — ${it.description || ''}</li>`;
+                });
+                html += '</ul>';
+            });
+            body.innerHTML = html;
+            panel.style.display = 'block';
+            panel.removeAttribute('open');
+        }
+
+        function v4BuyMarkColor(sig) {
+            const rules = (sig.rules || []).concat(sig.reasons || []);
+            for (const name of Object.keys(V4_V_REV_MARK_COLORS)) {
+                if (rules.some(r => String(r).indexOf(name) >= 0)) return V4_V_REV_MARK_COLORS[name];
+            }
+            return '#e67e22';
+        }
+
+        function switchAnalysisEngine(tab) {
+            if (tab !== 'v2' && tab !== 'v3' && tab !== 'v4') return;
+            if (tab === 'v4' && lastAnalyzeBundle && !lastAnalyzeBundle.v4) return;
+            currentEngineTab = tab;
+            updateEngineTabButtons(lastAnalyzeBundle);
             if (lastAnalyzeBundle) {
                 renderAnalysisResult(lastAnalyzeBundle);
                 syncSignalsFromActiveBundle();
@@ -1959,9 +2183,7 @@
                 const data = await res.json();
                 if (data.success && data.exists) {
                     lastAnalyzeBundle = data;
-                    const evTabs = document.getElementById('engineVersionTabs');
-                    if (evTabs && data.v2 && data.v3) evTabs.style.display = 'flex';
-                    else if (evTabs) evTabs.style.display = 'none';
+                    showEngineVersionTabs(data);
                     syncSignalsFromActiveBundle();
                     renderAnalysisResult(data);
                     await ensureDayKlineCacheForBsChart();
@@ -2080,15 +2302,12 @@
                 const data = await res.json();
                 if (data.success) {
                     lastAnalyzeBundle = data;
-                    const evTabs = document.getElementById('engineVersionTabs');
-                    if (evTabs && data.v2 && data.v3) evTabs.style.display = 'flex';
-                    else if (evTabs) evTabs.style.display = 'none';
+                    showEngineVersionTabs(data);
                     syncSignalsFromActiveBundle();
                     renderAnalysisResult(data);
                     await ensureDayKlineCacheForBsChart();
                     renderSignalChart(currentAllSignals, {});
-                    const runlogTab = document.getElementById('runlog');
-                    if (runlogTab && runlogTab.classList.contains('active')) loadRunLogs();
+                    showTab('runlog');
                 } else {
                     showToast(data.message || '分析失败', 'error');
                 }
@@ -2105,16 +2324,8 @@
             const container = document.getElementById('analysisResult');
             const prevScrollWrap = document.getElementById('bsSignalScrollWrap');
             const savedBsListScroll = prevScrollWrap ? prevScrollWrap.scrollTop : 0;
-            const evTabs = document.getElementById('engineVersionTabs');
-            if (evTabs) {
-                if (data && data.v2 && data.v3) {
-                    evTabs.style.display = 'flex';
-                    document.getElementById('engineTabV2').classList.toggle('active', currentEngineTab === 'v2');
-                    document.getElementById('engineTabV3').classList.toggle('active', currentEngineTab === 'v3');
-                } else {
-                    evTabs.style.display = 'none';
-                }
-            }
+            showEngineVersionTabs(data);
+            renderEngineRulesPanel(data);
 
             const blk = getActiveEngineBlock(data) || {};
             const todayBuy = blk.today_buy;
@@ -2130,7 +2341,7 @@
             const depthUsed = blk.depth_used != null ? blk.depth_used : (data.depth_used || 200);
             const summary = blk.summary || {};
             const sim = blk.portfolio_sim || {};
-            const verLabel = (data && data.v2 && data.v3) ? (currentEngineTab === 'v3' ? 'V3' : 'V2') : 'V2';
+            const verLabel = getEngineVerLabel(data);
 
             let todayLabel = '观望';
             let todayClass = 'hold';
@@ -2160,7 +2371,8 @@
                 html += '<div style="flex-wrap:wrap;">';
                 todayRules.forEach(r => {
                     let tagClass = 'tech';
-                    if (r.includes('形态') || r.includes('W底') || r.includes('M顶') || r.includes('头肩') || r.includes('沿均线') || r.includes('主升')) tagClass = 'pattern';
+                    if (r.includes('V4') || r.includes('V反')) tagClass = 'pattern';
+                    else if (r.includes('形态') || r.includes('W底') || r.includes('M顶') || r.includes('头肩') || r.includes('沿均线') || r.includes('主升')) tagClass = 'pattern';
                     else if (r.includes('量') || r.includes('放量') || r.includes('地量') || r.includes('天量')) tagClass = 'volume';
                     else if (r.includes('趋势线')) tagClass = 'rule-trend';
                     html += `<span class="rule-tag ${tagClass}">${r}</span>`;
@@ -2377,6 +2589,8 @@
                     if (sig) {
                         const isB = sig.type === 'B';
                         const pinLabel = isB ? 'B' : 'S';
+                        let pinColor = isB ? '#9b59b6' : '#e67e22';
+                        if (isB && currentEngineTab === 'v4') pinColor = v4BuyMarkColor(sig);
                         marks.push({
                             name: pinLabel,
                             coord: [d, isB ? k.low - gap : k.high + gap],
@@ -2385,7 +2599,7 @@
                             symbolSize: 28,
                             symbolRotate: isB ? 180 : 0,
                             symbolOffset: [0, 0],
-                            itemStyle: { color: isB ? '#9b59b6' : '#e67e22' },
+                            itemStyle: { color: pinColor },
                             label: {
                                 show: true,
                                 formatter: pinLabel,
@@ -2570,6 +2784,47 @@
                             tooltipExtremeLine('历史前高', 'prior_high_date', 'prior_high_price', 'return_vs_prior_high_pct', '#b19cd9');
                             tooltipExtremeLine('前高的前高', 'prior_prior_high_date', 'prior_prior_high_price', 'return_vs_prior_prior_high_pct', '#9b7fd4');
                             tooltipExtremeLine('历史前低', 'prior_low_date', 'prior_low_price', 'return_vs_prior_low_pct', '#5dca8a');
+                            tooltipExtremeLine('下一前高', 'next_prior_high_date', 'next_prior_high_price', 'upside_to_next_prior_high_pct', '#7ec8e3');
+                            if (sig.v_structure) {
+                                const vs = sig.v_structure;
+                                r += '<div style="margin-top:6px;padding:6px;background:rgba(123,179,213,0.12);border-radius:4px;border-left:3px solid #7fb3d5;">';
+                                r += '<div style="color:#7fb3d5;font-weight:600;font-size:11px;">V形结构（跌深从起点棒起算）</div>';
+                                if (vs.left_peak_date) {
+                                    r += `<div style="color:#e8d4ff;font-size:11px;padding-left:4px;">起点(左肩高点): <b>${normalizeSignalDate(vs.left_peak_date)}</b> @ ${vs.left_peak_price != null ? vs.left_peak_price : '—'}</div>`;
+                                }
+                                if (vs.bottom_date) {
+                                    r += `<div style="color:#bbb;font-size:11px;padding-left:4px;">V底: ${normalizeSignalDate(vs.bottom_date)} @ ${vs.bottom_price != null ? vs.bottom_price : '—'}</div>`;
+                                }
+                                if (vs.drop_pct_avg != null) {
+                                    r += `<div style="color:#aaa;font-size:11px;padding-left:4px;">左侧跌深(均价): ${vs.drop_pct_avg}%（门槛≥4%）</div>`;
+                                }
+                                if (vs.right_entry_date) {
+                                    r += `<div style="color:#9bdc9b;font-size:11px;padding-left:4px;">右侧确认/买入: ${normalizeSignalDate(vs.right_entry_date)}</div>`;
+                                }
+                                if (vs.note) {
+                                    r += `<div style="color:#888;font-size:10px;padding-left:4px;">${vs.note}</div>`;
+                                }
+                                r += '</div>';
+                            }
+                            if (sig.w_structure) {
+                                const ws = sig.w_structure;
+                                r += '<div style="margin-top:4px;padding:6px;background:rgba(180,140,220,0.1);border-radius:4px;border-left:3px solid #b19cd9;">';
+                                r += '<div style="color:#b19cd9;font-weight:600;font-size:11px;">W形结构</div>';
+                                if (ws.left_bottom_date) r += `<div style="font-size:11px;padding-left:4px;color:#bbb;">左底: ${normalizeSignalDate(ws.left_bottom_date)}</div>`;
+                                if (ws.right_bottom_date) r += `<div style="font-size:11px;padding-left:4px;color:#bbb;">右底: ${normalizeSignalDate(ws.right_bottom_date)}</div>`;
+                                if (ws.right_entry_date) r += `<div style="font-size:11px;padding-left:4px;color:#9bdc9b;">右侧确认: ${normalizeSignalDate(ws.right_entry_date)}</div>`;
+                                if (ws.neck_high != null) r += `<div style="font-size:11px;padding-left:4px;color:#aaa;">瓶口(high): ${ws.neck_high}</div>`;
+                                r += '</div>';
+                            }
+                            if (sig.rule_details && sig.rule_details.length) {
+                                r += '<div style="margin-top:6px;padding-top:4px;border-top:1px dashed #555;font-size:10px;color:#888;">规则结构明细</div>';
+                                sig.rule_details.forEach(rd => {
+                                    r += `<div style="color:#7fb3d5;font-size:11px;font-weight:600;margin-top:4px;">▸ ${rd.rule}</div>`;
+                                    (rd.lines || []).forEach(line => {
+                                        r += `<div style="color:#bbb;font-size:11px;padding-left:8px;">${line}</div>`;
+                                    });
+                                });
+                            }
                             if (sig.confirm_note) {
                                 r += `<div style="color:#7fb3d5;font-size:11px;">${sig.confirm_note}</div>`;
                             }
@@ -2732,9 +2987,335 @@
             showToast(data.message, data.success ? 'success' : 'error');
         }
         
+        let poolLogRows = [];
+        let poolLogSortKey = 'v4';
+        let poolLogSortDir = -1;
+
+        function formatDeltaPct(delta) {
+            if (delta === null || delta === undefined || delta === '') return '-';
+            const n = Number(delta);
+            if (!isFinite(n)) return '-';
+            const cls = n >= 0 ? 'run-log-ret-pos' : 'run-log-ret-neg';
+            const sign = n > 0 ? '+' : '';
+            return `<span class="${cls}" title="相对上一执行">${sign}${n.toFixed(2)}%</span>`;
+        }
+
+        function compareDelta(row, eng) {
+            const c = row && row.compare;
+            if (!c) return null;
+            return c[eng + '_delta_pct'];
+        }
+
+        function comparePoolLogs(newer, older) {
+            if (!newer || !older || newer.success === false || older.success === false) return null;
+            const out = {};
+            ['v2', 'v3', 'v4'].forEach(eng => {
+                const n = (newer[eng] || {}).total_return_pct;
+                const o = (older[eng] || {}).total_return_pct;
+                if (n != null && o != null && isFinite(Number(n)) && isFinite(Number(o))) {
+                    out[eng + '_delta_pct'] = Math.round((Number(n) - Number(o)) * 100) / 100;
+                    out[eng + '_older_pct'] = Number(o);
+                    out[eng + '_newer_pct'] = Number(n);
+                }
+            });
+            return Object.keys(out).length ? out : null;
+        }
+
+        function renderPoolHistoryRow(log, cmp) {
+            const v2 = log.v2 || {};
+            const v3 = log.v3 || {};
+            const v4 = log.v4 || {};
+            const ok = log.success !== false;
+            let note = '-';
+            if (cmp && cmp.v4_delta_pct != null) {
+                note = `较上一执行 V4 ${cmp.v4_older_pct}% → ${cmp.v4_newer_pct}%`;
+            } else if (!cmp) {
+                note = '首条或无上一条可对比';
+            }
+            let html = '<tr>';
+            html += `<td>${formatRunLogTime(log.created_at)}</td>`;
+            html += `<td>${RUN_LOG_TRIGGER_CN[log.trigger] || log.trigger || '-'}</td>`;
+            html += `<td style="color:${ok ? '#27ae60' : '#ef5350'}">${ok ? '成功' : '失败'}</td>`;
+            html += `<td>${formatRetPct(v2.total_return_pct)}</td><td>${formatDeltaPct(cmp && cmp.v2_delta_pct)}</td>`;
+            html += `<td>${formatRetPct(v3.total_return_pct)}</td><td>${formatDeltaPct(cmp && cmp.v3_delta_pct)}</td>`;
+            html += `<td>${formatRetPct(v4.total_return_pct)}</td><td>${formatDeltaPct(cmp && cmp.v4_delta_pct)}</td>`;
+            html += `<td style="font-size:11px;color:#888;white-space:normal;">${note}</td>`;
+            html += `<td>${formatRunLogDuration(log.duration_ms)}</td>`;
+            html += '</tr>';
+            return html;
+        }
+
+        function sortPoolHistoryDesc(hist) {
+            return [...(hist || [])].sort((a, b) => {
+                const ta = new Date(a.created_at || 0).getTime();
+                const tb = new Date(b.created_at || 0).getTime();
+                return tb - ta;
+            });
+        }
+
+        function renderPoolHistoryByStock(rows) {
+            const wrap = document.getElementById('poolTimelineWrap');
+            if (!wrap) return;
+            if (!rows || !rows.length) {
+                wrap.className = 'run-log-table-wrap empty-state';
+                wrap.innerHTML = '股票池为空';
+                return;
+            }
+            let html = '';
+            rows.forEach((row, gi) => {
+                const code = row.stock_code || '';
+                const name = row.stock_name || '';
+                const hist = sortPoolHistoryDesc(row.history || []).slice(0, 10);
+                const total = row.analyze_run_total != null ? row.analyze_run_total : 0;
+                const openAttr = gi < 3 ? ' open' : '';
+                html += `<details class="pool-history-group"${openAttr}>`;
+                html += `<summary>${code} ${name} · 历史共 ${total} 次`;
+                html += ` · 本组显示最近 ${hist.length} 条（时间倒序，最多 10 条）`;
+                html += '</summary>';
+                html += '<div class="pool-history-table-wrap"><table class="pool-log-table"><thead><tr>';
+                html += '<th>#</th><th>时间</th><th>触发</th><th>状态</th>';
+                html += '<th>V2</th><th>ΔV2</th><th>V3</th><th>ΔV3</th><th>V4</th><th>ΔV4</th>';
+                html += '<th>相对上一执行</th><th>耗时</th>';
+                html += '</tr></thead><tbody>';
+                if (!hist.length) {
+                    html += '<tr><td colspan="12" style="text-align:center;color:#666;">暂无运行分析记录</td></tr>';
+                } else {
+                    hist.forEach((log, i) => {
+                        const older = hist[i + 1];
+                        const cmp = older ? comparePoolLogs(log, older) : null;
+                        let rowHtml = renderPoolHistoryRow(log, cmp);
+                        rowHtml = rowHtml.replace('<tr>', `<tr><td>${i + 1}</td>`);
+                        html += rowHtml;
+                    });
+                }
+                html += '</tbody></table></div></details>';
+            });
+            wrap.className = 'run-log-table-wrap';
+            wrap.style.overflow = 'visible';
+            wrap.innerHTML = html;
+        }
+
+        function showPoolReturnLogPage() {
+            document.getElementById('stockDetail').style.display = 'none';
+            document.getElementById('emptyState').style.display = 'none';
+            const poolPage = document.getElementById('poolReturnLogPage');
+            if (poolPage) poolPage.classList.add('active');
+            loadPoolReturnLog();
+        }
+
+        function renderPoolLogSummary(aggregate) {
+            const el = document.getElementById('poolLogSummary');
+            if (!el || !aggregate) {
+                if (el) { el.style.display = 'none'; el.innerHTML = ''; }
+                return;
+            }
+            const fmt = v => v != null ? `${v}%` : '-';
+            const fd = v => v != null ? formatDeltaPct(v) : '-';
+            let html = `<strong>股票池 ${aggregate.stock_count} 只</strong> · `;
+            html += `有分析记录 ${aggregate.with_analyze_log} 只（成功 ${aggregate.with_success_log} 只）`;
+            html += ` · 可对比上一执行 ${aggregate.with_compare_pair || 0} 只<br>`;
+            html += `最近一次池均收益：V2 ${fmt(aggregate.avg_v2_return_pct)} · V3 ${fmt(aggregate.avg_v3_return_pct)} · V4 ${fmt(aggregate.avg_v4_return_pct)}<br>`;
+            html += `<strong>相对上一执行池均 Δ：</strong> V2 ${fd(aggregate.avg_v2_delta_pct)} · V3 ${fd(aggregate.avg_v3_delta_pct)} · V4 ${fd(aggregate.avg_v4_delta_pct)}`;
+            if (aggregate.v4_improved_count != null) {
+                html += ` &nbsp;|&nbsp; V4 提升 <span class="run-log-ret-pos">${aggregate.v4_improved_count}</span> 只`;
+                html += `、下降 <span class="run-log-ret-neg">${aggregate.v4_worse_count || 0}</span> 只`;
+            }
+            el.innerHTML = html;
+            el.style.display = 'block';
+        }
+
+        function poolSortValue(row, key) {
+            const lat = row.latest;
+            if (!lat || lat.success === false) return null;
+            const block = lat[key] || {};
+            const v = block.total_return_pct;
+            return v != null && isFinite(Number(v)) ? Number(v) : null;
+        }
+
+        function sortedPoolRows(rows) {
+            const key = poolLogSortKey;
+            const dir = poolLogSortDir;
+            return [...(rows || [])].sort((a, b) => {
+                const va = poolSortValue(a, key);
+                const vb = poolSortValue(b, key);
+                if (va == null && vb == null) return String(a.stock_code).localeCompare(String(b.stock_code));
+                if (va == null) return 1;
+                if (vb == null) return -1;
+                return dir * (va - vb);
+            });
+        }
+
+        function togglePoolSort(key) {
+            if (poolLogSortKey === key) poolLogSortDir = -poolLogSortDir;
+            else { poolLogSortKey = key; poolLogSortDir = -1; }
+            renderPoolLogTable(sortedPoolRows(poolLogRows));
+        }
+
+        function renderPoolLogTable(rows) {
+            const wrap = document.getElementById('poolLogTableWrap');
+            if (!wrap) return;
+            if (!rows || !rows.length) {
+                wrap.className = 'run-log-table-wrap empty-state';
+                wrap.innerHTML = '股票池为空，请先在左侧添加股票并运行分析';
+                return;
+            }
+            const sortMark = k => (poolLogSortKey === k ? (poolLogSortDir > 0 ? ' ▲' : ' ▼') : '');
+            let html = '<table class="pool-log-table"><thead><tr>';
+            html += '<th>代码</th><th>名称</th><th>执行次数</th><th>最近分析</th><th>状态</th>';
+            html += `<th style="cursor:pointer;" onclick="togglePoolSort('v2')">V2收益${sortMark('v2')}</th><th>ΔV2</th>`;
+            html += `<th style="cursor:pointer;" onclick="togglePoolSort('v3')">V3收益${sortMark('v3')}</th><th>ΔV3</th>`;
+            html += `<th style="cursor:pointer;" onclick="togglePoolSort('v4')">V4收益${sortMark('v4')}</th><th>ΔV4</th>`;
+            html += '<th>上次时间</th><th>耗时</th><th class="pool-actions">操作</th>';
+            html += '</tr></thead><tbody>';
+            rows.forEach(row => {
+                const lat = row.latest;
+                const prev = row.previous;
+                const v2 = (lat && lat.v2) || {};
+                const v3 = (lat && lat.v3) || {};
+                const v4 = (lat && lat.v4) || {};
+                const ok = lat && lat.success !== false;
+                const code = row.stock_code || '';
+                const name = row.stock_name || '';
+                const runTotal = row.analyze_run_total != null ? row.analyze_run_total : '-';
+                html += `<tr onclick="openStockFromPool('${code}', '${String(name).replace(/'/g, "\\'")}')">`;
+                html += `<td><strong>${code}</strong></td><td>${name}</td>`;
+                html += `<td title="数据库内运行分析总次数">${runTotal}</td>`;
+                html += `<td>${lat ? formatRunLogTime(lat.created_at) : '<span style="color:#666;">未分析</span>'}</td>`;
+                html += `<td style="color:${!lat ? '#888' : ok ? '#27ae60' : '#ef5350'}">${!lat ? '—' : ok ? '成功' : '失败'}</td>`;
+                if (!lat || lat.run_type !== 'analyze') {
+                    html += '<td colspan="8" style="text-align:center;color:#666;">—</td>';
+                } else {
+                    html += `<td>${formatRetPct(v2.total_return_pct)}</td><td>${formatDeltaPct(compareDelta(row, 'v2'))}</td>`;
+                    html += `<td>${formatRetPct(v3.total_return_pct)}</td><td>${formatDeltaPct(compareDelta(row, 'v3'))}</td>`;
+                    html += `<td>${formatRetPct(v4.total_return_pct)}</td><td>${formatDeltaPct(compareDelta(row, 'v4'))}</td>`;
+                    html += `<td>${prev ? formatRunLogTime(prev.created_at) : '-'}</td>`;
+                    html += `<td>${lat ? formatRunLogDuration(lat.duration_ms) : '-'}</td>`;
+                }
+                html += `<td class="pool-actions" onclick="event.stopPropagation()">`;
+                html += `<button type="button" class="btn btn-success" onclick="poolRunOne('${code}')">公式+分析</button>`;
+                html += `<button type="button" class="btn btn-primary" onclick="openStockRunLog('${code}', '${String(name).replace(/'/g, "\\'")}')">日志</button>`;
+                html += '</td></tr>';
+            });
+            html += '</tbody></table>';
+            wrap.className = 'run-log-table-wrap';
+            wrap.innerHTML = html;
+        }
+
+        async function loadPoolReturnLog() {
+            const wrap = document.getElementById('poolLogTableWrap');
+            const tlWrap = document.getElementById('poolTimelineWrap');
+            if (!wrap) return;
+            wrap.className = 'run-log-table-wrap empty-state';
+            wrap.textContent = '加载中…';
+            if (tlWrap) { tlWrap.className = 'run-log-table-wrap empty-state'; tlWrap.textContent = '加载中…'; }
+            try {
+                const res = await fetch(`${API_BASE}/v2/run_logs/pool?history_per_stock=10`);
+                const data = await res.json();
+                if (!data.success) {
+                    wrap.textContent = data.message || '加载失败';
+                    if (tlWrap) tlWrap.textContent = data.message || '加载失败';
+                    return;
+                }
+                poolLogRows = data.rows || [];
+                renderPoolLogSummary(data.aggregate);
+                renderPoolLogTable(sortedPoolRows(poolLogRows));
+                renderPoolHistoryByStock(poolLogRows);
+            } catch (e) {
+                wrap.textContent = '网络错误';
+                if (tlWrap) tlWrap.textContent = '网络错误';
+            }
+        }
+
+        function poolRunPayload(codes) {
+            const rw = document.getElementById('poolRunWeights');
+            const ra = document.getElementById('poolRunAnalyze');
+            return {
+                stock_codes: codes && codes.length ? codes : undefined,
+                run_weights: !!(rw && rw.checked),
+                run_analyze: !!(ra && ra.checked),
+                trigger: codes && codes.length === 1 ? 'pool_single' : 'pool_batch',
+            };
+        }
+
+        async function poolRunOne(code) {
+            if (!code) return;
+            showToast(`${code} 公式+分析中…`, 'info');
+            try {
+                const res = await fetch(`${API_BASE}/v2/pool/run`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(poolRunPayload([code])),
+                });
+                const data = await res.json();
+                if (data.success && data.results && data.results[0] && data.results[0].success) {
+                    showToast(`${code} 完成`, 'success');
+                    loadPoolReturnLog();
+                } else {
+                    const msg = (data.results && data.results[0] && data.results[0].message) || data.message || '失败';
+                    showToast(`${code}: ${msg}`, 'error');
+                }
+            } catch (e) {
+                showToast('网络错误', 'error');
+            }
+        }
+
+        async function poolBatchRun() {
+            const btn = document.getElementById('poolBatchRunBtn');
+            const rw = document.getElementById('poolRunWeights');
+            const ra = document.getElementById('poolRunAnalyze');
+            if (!poolLogRows.length) {
+                showToast('股票池为空', 'error');
+                return;
+            }
+            if (!(rw && rw.checked) && !(ra && ra.checked)) {
+                showToast('请至少勾选公式计算或运行分析', 'error');
+                return;
+            }
+            const parts = [];
+            if (rw && rw.checked) parts.push('公式计算');
+            if (ra && ra.checked) parts.push('运行分析');
+            if (!confirm(`对股票池 ${poolLogRows.length} 只股票批量执行：${parts.join(' + ')}？\n将顺序执行并写入历次日志。`)) return;
+            if (btn) { btn.disabled = true; btn.textContent = '批量执行中…'; }
+            try {
+                const res = await fetch(`${API_BASE}/v2/pool/run`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(poolRunPayload()),
+                });
+                const data = await res.json();
+                if (data.success) {
+                    showToast(data.message || '批量完成', 'success');
+                    loadPoolReturnLog();
+                } else {
+                    showToast(data.message || '批量失败', 'error');
+                }
+            } catch (e) {
+                showToast('网络错误', 'error');
+            } finally {
+                if (btn) { btn.disabled = false; btn.textContent = '批量公式+分析'; }
+            }
+        }
+
+        function openStockFromPool(code, name) {
+            selectStock(code, name);
+            showTab('analysis');
+        }
+
+        async function openStockRunLog(code, name) {
+            await selectStock(code, name);
+            showTab('runlog');
+            const allCb = document.getElementById('runLogAllStocks');
+            if (allCb) allCb.checked = false;
+            loadRunLogs();
+        }
+
         const RUN_LOG_TYPE_CN = { analyze: '运行分析', calculate_weights: '计算权重' };
         const RUN_LOG_TRIGGER_CN = {
-            manual: '手动', auto_refresh: '自动刷新', signals_recompute: '缓存补算'
+            manual: '手动',
+            auto_refresh: '自动刷新',
+            signals_recompute: '缓存补算',
+            pool_batch: '池批量',
+            pool_single: '池单只',
         };
 
         function formatRunLogDuration(ms) {
@@ -2779,16 +3360,20 @@
             const prev = summary.previous;
             const v2 = lat.v2 || {};
             const v3 = lat.v3 || {};
+            const v4 = lat.v4 || {};
             let html = `<strong>${summary.stock_code}</strong> ${summary.stock_name || ''} · 最近 ${summary.run_count} 次「运行分析」记录<br>`;
             html += `最近一次（${formatRunLogTime(lat.created_at)}）：`;
             html += `V2 收益 ${v2.total_return_pct != null ? v2.total_return_pct + '%' : '-'}，胜率 ${v2.win_rate_pct != null ? v2.win_rate_pct + '%' : '-'}，期末 ${formatMoney(v2.final_equity)}；`;
             html += `V3 收益 ${v3.total_return_pct != null ? v3.total_return_pct + '%' : '-'}，胜率 ${v3.win_rate_pct != null ? v3.win_rate_pct + '%' : '-'}，期末 ${formatMoney(v3.final_equity)}；`;
+            html += `V4 收益 ${v4.total_return_pct != null ? v4.total_return_pct + '%' : '-'}，胜率 ${v4.win_rate_pct != null ? v4.win_rate_pct + '%' : '-'}，期末 ${formatMoney(v4.final_equity)}；`;
             html += `耗时 ${formatRunLogDuration(lat.duration_ms)}`;
             if (prev) {
                 const pv2 = (prev.v2 || {}).total_return_pct;
                 const lv2 = v2.total_return_pct;
                 const pv3 = (prev.v3 || {}).total_return_pct;
                 const lv3 = v3.total_return_pct;
+                const pv4 = (prev.v4 || {}).total_return_pct;
+                const lv4 = v4.total_return_pct;
                 if (pv2 != null && lv2 != null) {
                     const d = (lv2 - pv2).toFixed(2);
                     html += `<br>相对上一运行分析：V2 收益 ${d >= 0 ? '+' : ''}${d}%`;
@@ -2796,6 +3381,10 @@
                 if (pv3 != null && lv3 != null) {
                     const d = (lv3 - pv3).toFixed(2);
                     html += ` · V3 收益 ${d >= 0 ? '+' : ''}${d}%`;
+                }
+                if (pv4 != null && lv4 != null) {
+                    const d = (lv4 - pv4).toFixed(2);
+                    html += ` · V4 收益 ${d >= 0 ? '+' : ''}${d}%`;
                 }
             }
             el.innerHTML = html;
@@ -2816,12 +3405,14 @@
             html += '<th>类型</th><th>触发</th><th>状态</th>';
             html += '<th>V2总收益</th><th>V2胜率</th><th>V2期末(100万)</th><th>V2笔数</th>';
             html += '<th>V3总收益</th><th>V3胜率</th><th>V3期末(100万)</th><th>V3笔数</th>';
+            html += '<th>V4总收益</th><th>V4胜率</th><th>V4期末(100万)</th><th>V4笔数</th>';
             html += '<th>权重优化收益</th><th>权重胜率</th><th>迭代</th>';
             html += '<th>耗时</th><th>K线深度</th><th>备注</th>';
             html += '</tr></thead><tbody>';
             logs.forEach(log => {
                 const v2 = log.v2 || {};
                 const v3 = log.v3 || {};
+                const v4 = log.v4 || {};
                 const wo = log.weights_opt || {};
                 const ok = log.success !== false;
                 html += '<tr>';
@@ -2833,7 +3424,7 @@
                 html += `<td>${RUN_LOG_TRIGGER_CN[log.trigger] || log.trigger || '-'}</td>`;
                 html += `<td style="color:${ok ? '#27ae60' : '#ef5350'}">${ok ? '成功' : '失败'}</td>`;
                 if (log.run_type === 'calculate_weights') {
-                    html += '<td colspan="7" style="text-align:center;color:#666;">—</td>';
+                    html += '<td colspan="11" style="text-align:center;color:#666;">—</td>';
                     html += `<td>${formatRetPct(wo.total_return_pct)}</td>`;
                     html += `<td>${wo.win_rate_pct != null ? wo.win_rate_pct + '%' : '-'}</td>`;
                     html += `<td>${wo.iteration_count != null ? wo.iteration_count : '-'}</td>`;
@@ -2846,6 +3437,10 @@
                     html += `<td>${v3.win_rate_pct != null ? v3.win_rate_pct + '%' : '-'}</td>`;
                     html += `<td>${formatMoney(v3.final_equity)}</td>`;
                     html += `<td>${v3.closed_trades != null ? v3.closed_trades : '-'}</td>`;
+                    html += `<td>${formatRetPct(v4.total_return_pct)}</td>`;
+                    html += `<td>${v4.win_rate_pct != null ? v4.win_rate_pct + '%' : '-'}</td>`;
+                    html += `<td>${formatMoney(v4.final_equity)}</td>`;
+                    html += `<td>${v4.closed_trades != null ? v4.closed_trades : '-'}</td>`;
                     html += '<td>—</td><td>—</td><td>—</td>';
                 }
                 html += `<td>${formatRunLogDuration(log.duration_ms)}</td>`;

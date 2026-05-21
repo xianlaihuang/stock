@@ -2,9 +2,14 @@ import time
 
 from flask import request, jsonify
 from app import app
-from models import KlineData
+from models import KlineData, Stock
 import engine_v2 as ev2
 import analysis_run_log as arl
+
+
+def _v4_get_conditions():
+    from v4_aggressive.engine import get_conditions
+    return get_conditions()
 
 
 def _klines_to_df(klines):
@@ -68,17 +73,16 @@ def _engine_block_from_result(result, depth_used):
     }
 
 
-@app.route('/api/v2/calculate_weights', methods=['POST'])
-def v2_calculate_weights():
-    data = request.json or {}
-    stock_code = data.get('stock_code')
-    trigger = data.get('trigger', 'manual')
-    if not stock_code:
-        return jsonify({'success': False, 'message': 'stock_code is required'}), 400
-
+def _run_calculate_weights_for_stock(stock_code, trigger='manual'):
+    """公式计算权重并写日志；返回 (payload_dict, http_status)。"""
     klines = KlineData.get(stock_code, period='day')
     if not klines or len(klines) < 200:
-        return jsonify({'success': False, 'message': f'数据不足（当前{len(klines) if klines else 0}条，至少需要200条），请先抓取数据'}), 400
+        msg = f'数据不足（当前{len(klines) if klines else 0}条，至少需要200条），请先抓取数据'
+        arl.save_run_log(
+            stock_code, 'calculate_weights', success=False,
+            duration_ms=0, message=msg, trigger=trigger,
+        )
+        return {'success': False, 'message': msg, 'stock_code': stock_code}, 400
 
     df = _klines_to_df(klines)
     t0 = time.perf_counter()
@@ -90,40 +94,34 @@ def v2_calculate_weights():
             duration_ms=int((time.perf_counter() - t0) * 1000),
             message=str(e), trigger=trigger, depth_used=len(df),
         )
-        return jsonify({'success': False, 'message': str(e)}), 500
+        return {'success': False, 'message': str(e), 'stock_code': stock_code}, 500
 
     ev2.save_weights(stock_code, result)
+    duration_ms = int((time.perf_counter() - t0) * 1000)
+    total_return = round(result['total_return'] * 100, 2)
+    win_rate = round(result['win_rate'] * 100, 1)
+    message = (
+        f'V2公式计算完成，迭代{result["iteration_count"]}次，'
+        f'sum收益率{result["total_return"]*100:.2f}%'
+    )
+    arl.save_run_log(
+        stock_code, 'calculate_weights', success=True,
+        duration_ms=duration_ms, message=message, trigger=trigger, depth_used=len(df),
+        weights_opt={
+            'total_return_pct': total_return,
+            'win_rate_pct': win_rate,
+            'iteration_count': result['iteration_count'],
+        },
+    )
 
     buy_list = []
     for name, detail in result['buy_details'].items():
-        buy_list.append({
-            'name': name,
-            'reward': detail['reward'],
-            'penalty': detail['penalty'],
-            'raw_weight': detail['raw_weight'],
-            'effective_weight': detail['effective_weight'],
-            'normalized_weight': detail['normalized_weight'],
-            'win_rate': detail['win_rate'],
-            'score': detail['score'],
-            'level': detail['level'],
-        })
-
+        buy_list.append({'name': name, **detail})
     sell_list = []
     for name, detail in result['sell_details'].items():
-        sell_list.append({
-            'name': name,
-            'reward': detail['reward'],
-            'penalty': detail['penalty'],
-            'raw_weight': detail['raw_weight'],
-            'effective_weight': detail['effective_weight'],
-            'normalized_weight': detail['normalized_weight'],
-            'win_rate': detail['win_rate'],
-            'score': detail['score'],
-            'level': detail['level'],
-        })
-
-    buy_list.sort(key=lambda x: -x['normalized_weight'])
-    sell_list.sort(key=lambda x: -x['normalized_weight'])
+        sell_list.append({'name': name, **detail})
+    buy_list.sort(key=lambda x: -x.get('normalized_weight', 0))
+    sell_list.sort(key=lambda x: -x.get('normalized_weight', 0))
 
     payload = {
         'success': True,
@@ -133,45 +131,44 @@ def v2_calculate_weights():
         'buy_details': buy_list,
         'sell_details': sell_list,
         'iteration_count': result['iteration_count'],
-        'total_return': round(result['total_return'] * 100, 2),
-        'win_rate': round(result['win_rate'] * 100, 1),
-        'message': f'V2公式计算完成，迭代{result["iteration_count"]}次，sum收益率{result["total_return"]*100:.2f}%',
+        'total_return': total_return,
+        'win_rate': win_rate,
+        'message': message,
+        'duration_ms': duration_ms,
+        'weights_return_pct': total_return,
         'prd_utility_objective': ev2.V2_PRD_UTILITY_OBJECTIVE,
     }
     if 'prd_utility' in result:
         payload['prd_utility'] = result['prd_utility']
     if 'prd_max_drawdown' in result:
         payload['prd_max_drawdown'] = result['prd_max_drawdown']
-    arl.save_run_log(
-        stock_code, 'calculate_weights', success=True,
-        duration_ms=int((time.perf_counter() - t0) * 1000),
-        message=payload['message'], trigger=trigger, depth_used=len(df),
-        weights_opt={
-            'total_return_pct': payload['total_return'],
-            'win_rate_pct': payload['win_rate'],
-            'iteration_count': payload['iteration_count'],
-        },
-    )
-    return jsonify(payload)
+    return payload, 200
 
 
-@app.route('/api/v2/analyze', methods=['GET'])
-def v2_analyze_signals():
-    stock_code = request.args.get('stock_code')
-    start_date = request.args.get('start')
-    end_date = request.args.get('end')
-    trigger = request.args.get('trigger', 'manual')
-
+@app.route('/api/v2/calculate_weights', methods=['POST'])
+def v2_calculate_weights():
+    data = request.json or {}
+    stock_code = data.get('stock_code')
+    trigger = data.get('trigger', 'manual')
     if not stock_code:
         return jsonify({'success': False, 'message': 'stock_code is required'}), 400
+    payload, status = _run_calculate_weights_for_stock(stock_code, trigger=trigger)
+    return jsonify(payload), status
 
+
+def _run_analyze_for_stock(stock_code, *, start_date=None, end_date=None, trigger='manual'):
+    """运行 V2/V3/V4 分析并写日志；返回 (payload_dict, http_status)。"""
     klines = KlineData.get(stock_code, period='day')
     if not klines or len(klines) < 30:
-        return jsonify({'success': False, 'message': f'数据不足（当前{len(klines) if klines else 0}条），请先抓取数据'}), 400
+        msg = f'数据不足（当前{len(klines) if klines else 0}条），请先抓取数据'
+        arl.save_run_log(
+            stock_code, 'analyze', success=False, duration_ms=0,
+            message=msg, trigger=trigger,
+        )
+        return {'success': False, 'message': msg, 'stock_code': stock_code}, 400
 
     df = _klines_to_df(klines)
     t0 = time.perf_counter()
-
     cached = ev2.load_weights(stock_code)
     precomputed = None
     if cached:
@@ -181,8 +178,10 @@ def v2_analyze_signals():
         }
 
     try:
-        dual = ev2.analyze_signals_dual(df, precomputed_weights=precomputed,
-                                       start_date=start_date, end_date=end_date)
+        dual = ev2.analyze_signals_dual(
+            df, precomputed_weights=precomputed,
+            start_date=start_date, end_date=end_date,
+        )
     except Exception as e:
         arl.save_run_log(
             stock_code, 'analyze', success=False,
@@ -190,10 +189,9 @@ def v2_analyze_signals():
             message=str(e), trigger=trigger, depth_used=len(df),
             start_date=start_date, end_date=end_date,
         )
-        return jsonify({'success': False, 'message': str(e)}), 500
+        return {'success': False, 'message': str(e), 'stock_code': stock_code}, 500
 
     ev2.save_signals(stock_code, dual)
-
     v2 = dual['v2']
     v3 = dual['v3']
     v4 = dual.get('v4')
@@ -201,13 +199,15 @@ def v2_analyze_signals():
     block2 = _engine_block_from_result(v2, depth)
     block3 = _engine_block_from_result(v3, depth)
     block4 = _engine_block_from_result(v4, depth) if v4 else None
+    duration_ms = int((time.perf_counter() - t0) * 1000)
 
     arl.save_run_log(
         stock_code, 'analyze', success=True,
-        duration_ms=int((time.perf_counter() - t0) * 1000),
+        duration_ms=duration_ms,
         message='运行分析完成', trigger=trigger,
         v2_portfolio=block2.get('portfolio_sim'),
         v3_portfolio=block3.get('portfolio_sim'),
+        v4_portfolio=block4.get('portfolio_sim') if block4 else None,
         depth_used=depth, start_date=start_date, end_date=end_date,
     )
 
@@ -231,9 +231,29 @@ def v2_analyze_signals():
         'portfolio_sim': block2['portfolio_sim'],
         'v2': block2,
         'v3': block3,
+        'v4': block4,
+        'duration_ms': duration_ms,
+        'v2_return_pct': (block2.get('portfolio_sim') or {}).get('total_return_pct'),
+        'v3_return_pct': (block3.get('portfolio_sim') or {}).get('total_return_pct'),
+        'v4_return_pct': (block4.get('portfolio_sim') or {}).get('total_return_pct') if block4 else None,
     }
-    payload['v4'] = block4
-    return jsonify(payload)
+    return payload, 200
+
+
+@app.route('/api/v2/analyze', methods=['GET'])
+def v2_analyze_signals():
+    stock_code = request.args.get('stock_code')
+    start_date = request.args.get('start')
+    end_date = request.args.get('end')
+    trigger = request.args.get('trigger', 'manual')
+
+    if not stock_code:
+        return jsonify({'success': False, 'message': 'stock_code is required'}), 400
+
+    payload, status = _run_analyze_for_stock(
+        stock_code, start_date=start_date, end_date=end_date, trigger=trigger,
+    )
+    return jsonify(payload), status
 
 
 @app.route('/api/v2/weights', methods=['GET'])
@@ -377,7 +397,7 @@ def v2_get_signals():
             'sell_count': sum(1 for s in sigs_v4 if s.get('type') == 'S'),
         },
         'portfolio_sim': port4,
-        'conditions': ev2.get_conditions(),
+        'conditions': _v4_get_conditions(),
         'rule_stats': {},
     }
     block4 = _engine_block_from_result(pseudo_v4, depth_used)
@@ -433,6 +453,135 @@ def v2_run_logs_list():
     logs = arl.list_run_logs(stock_code=stock_code, limit=limit, run_type=run_type)
     summary = arl.stock_run_summary(stock_code) if stock_code else None
     return jsonify({'success': True, 'logs': logs, 'summary': summary})
+
+
+@app.route('/api/v2/run_logs/pool', methods=['GET'])
+def v2_run_logs_pool():
+    """股票池：最近 N 次运行分析、相对上一执行对比、历次时间线、池级汇总。"""
+    stocks = Stock.get_all()
+    codes = [s.get('code') for s in stocks if s.get('code')]
+    try:
+        history_per = int(request.args.get('history_per_stock', 10))
+    except (TypeError, ValueError):
+        history_per = 10
+    history_per = max(1, min(history_per, 30))
+    try:
+        timeline_limit = int(request.args.get('timeline_limit', 200))
+    except (TypeError, ValueError):
+        timeline_limit = 200
+    rows = arl.list_pool_dashboard_rows(codes, history_per_stock=history_per)
+    aggregate = arl.pool_analyze_aggregate(rows)
+    timeline = arl.list_pool_analyze_timeline(codes, limit=timeline_limit)
+    return jsonify({
+        'success': True,
+        'stocks': stocks,
+        'rows': rows,
+        'aggregate': aggregate,
+        'timeline': timeline,
+    })
+
+
+def _pool_run_one_stock(code, *, run_weights=True, run_analyze=True, trigger='pool_batch'):
+    """单只股票：默认先公式计算再运行分析。"""
+    row = {
+        'stock_code': code,
+        'weights_ok': False,
+        'analyze_ok': False,
+        'success': False,
+        'message': '',
+    }
+    if run_weights:
+        wpayload, wstatus = _run_calculate_weights_for_stock(code, trigger=trigger)
+        row['weights_ok'] = wpayload.get('success', False)
+        row['weights_return_pct'] = wpayload.get('weights_return_pct')
+        row['weights_message'] = wpayload.get('message', '')
+        row['weights_duration_ms'] = wpayload.get('duration_ms')
+        if not row['weights_ok']:
+            row['message'] = wpayload.get('message', '公式计算失败')
+            row['http_status'] = wstatus
+            return row
+    if run_analyze:
+        if not run_weights and not ev2.load_weights(code):
+            row['message'] = '未计算权重，已跳过分析'
+            row['skipped'] = True
+            return row
+        apayload, astatus = _run_analyze_for_stock(code, trigger=trigger)
+        row['analyze_ok'] = apayload.get('success', False)
+        row['v2_return_pct'] = apayload.get('v2_return_pct')
+        row['v3_return_pct'] = apayload.get('v3_return_pct')
+        row['v4_return_pct'] = apayload.get('v4_return_pct')
+        row['analyze_duration_ms'] = apayload.get('duration_ms')
+        row['http_status'] = astatus
+        if not row['analyze_ok']:
+            row['message'] = apayload.get('message', '运行分析失败')
+            return row
+    row['success'] = (row['weights_ok'] or not run_weights) and (row['analyze_ok'] or not run_analyze)
+    if row['success']:
+        parts = []
+        if run_weights:
+            parts.append('公式完成')
+        if run_analyze:
+            parts.append('分析完成')
+        row['message'] = '、'.join(parts)
+    return row
+
+
+@app.route('/api/v2/pool/run', methods=['POST'])
+@app.route('/api/v2/pool/analyze', methods=['POST'])
+def v2_pool_run():
+    """股票池批量：默认公式计算 + 运行分析（顺序执行，逐只写日志）。"""
+    data = request.json or {}
+    codes = data.get('stock_codes')
+    run_weights = data.get('run_weights', True)
+    if run_weights is None:
+        run_weights = True
+    run_analyze = data.get('run_analyze', True)
+    if run_analyze is None:
+        run_analyze = True
+    run_weights = bool(run_weights)
+    run_analyze = bool(run_analyze)
+    trigger = data.get('trigger', 'pool_batch')
+
+    if codes:
+        codes = [str(c).strip() for c in codes if str(c).strip()]
+    else:
+        stocks = Stock.get_all()
+        codes = [s.get('code') for s in stocks if s.get('code')]
+
+    if not codes:
+        return jsonify({'success': False, 'message': '股票池为空'}), 400
+    if not run_weights and not run_analyze:
+        return jsonify({'success': False, 'message': '请至少选择公式计算或运行分析'}), 400
+
+    results = []
+    ok = 0
+    fail = 0
+    skip = 0
+    for code in codes:
+        row = _pool_run_one_stock(
+            code, run_weights=run_weights, run_analyze=run_analyze, trigger=trigger,
+        )
+        if row.get('skipped'):
+            skip += 1
+        elif row.get('success'):
+            ok += 1
+        else:
+            fail += 1
+        results.append(row)
+
+    return jsonify({
+        'success': True,
+        'message': f'批量完成：成功 {ok}，失败 {fail}，跳过 {skip}',
+        'summary': {
+            'total': len(codes),
+            'ok': ok,
+            'fail': fail,
+            'skip': skip,
+            'run_weights': run_weights,
+            'run_analyze': run_analyze,
+        },
+        'results': results,
+    })
 
 
 @app.route('/api/v2/run_logs', methods=['DELETE'])

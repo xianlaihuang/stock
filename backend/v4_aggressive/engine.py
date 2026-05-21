@@ -1,20 +1,19 @@
+"""
+V4 激进引擎（自 V2/V3 规则快照 fork，独立演进）。
+仅通过 analyze_signals_v4_aggressive() 调用。
+"""
 import pandas as pd
 import numpy as np
 import talib
 from scipy import stats
 import warnings
 import importlib
-import dynamic_weight_engine as dwe
-from db import db
+from v4_aggressive import dynamic_weight_engine as dwe
 from datetime import datetime
 
 warnings.filterwarnings('ignore')
 
-weights_v2_collection = db['stock_weights_v2']
-signals_v2_collection = db['stock_signals_v2']
 
-weights_v2_collection.create_index('stock_code', unique=True)
-signals_v2_collection.create_index('stock_code', unique=True)
 
 # ========== PRD《B-S打标与公式权重优化方案》落地开关与参数 ==========
 V2_EXECUTION_MODEL = 'next_open'
@@ -51,12 +50,12 @@ PRD_BUY_RULE_GROUP = {
 }
 
 # V3：下一交易日阳线(收盘>开盘)确认类 pending 的 meta 键与 confirm_note
-_V3_NEXTDAY_BULL_PENDING = (
-    ('v3_engulf_pending', 'V3看涨吞没:下一交易日阳线确认B(收盘>开盘)'),
-    ('v3_upper_shadow_pending', 'V3长上影:下一交易日阳线确认B(收盘>开盘)'),
-    ('v3_box_break_pending', 'V3横盘整理向上突破:下一交易日阳线确认B(收盘>开盘)'),
-    ('v3_n_shape_pending', 'V3N字形突破:下一交易日阳线确认B(收盘>开盘)'),
-    ('v3_flag_pending', 'V3旗形突破:下一交易日阳线确认B(收盘>开盘)'),
+_V4_NEXTDAY_BULL_PENDING = (
+    ('v4_engulf_pending', 'V4看涨吞没:下一交易日阳线确认B(收盘>开盘)'),
+    ('v4_upper_shadow_pending', 'V4长上影:下一交易日阳线确认B(收盘>开盘)'),
+    ('v4_box_break_pending', 'V4横盘整理向上突破:下一交易日阳线确认B(收盘>开盘)'),
+    ('v4_n_shape_pending', 'V4N字形突破:下一交易日阳线确认B(收盘>开盘)'),
+    ('v4_flag_pending', 'V4旗形突破:下一交易日阳线确认B(收盘>开盘)'),
 )
 PRD_SELL_RULE_GROUP = {
     'MA死叉': 'ma', 'MACD死叉': 'macd', 'MACD顶背离': 'macd',
@@ -433,26 +432,81 @@ def _portfolio_sim_from_paired(paired_signals, initial_capital=1_000_000.0):
     }
 
 
-def _mandatory_buy_rules_v3(df, start_offset):
-    """
-    V3：必买里用「W底右侧 / V反右侧」替代「W底突破 / V反底部」（右侧确认日即触发，不要求突破颈线）。
-    检测逻辑与 strategy_vw_bottle_backtest 中事件定义一致。
-    """
+def _legacy_mandatory_sell_series(df, rule_name, start_offset):
+    import numpy as np
+    from v4_aggressive.structure_legacy import is_m_top_break_legacy, is_v_top_break_legacy
+
+    n = len(df)
+    arr = np.zeros(n, dtype=bool)
+    for idx in range(int(start_offset), n):
+        if rule_name == 'M顶跌破':
+            arr[idx] = is_m_top_break_legacy(df, idx)
+        elif rule_name == 'V反顶部':
+            arr[idx] = is_v_top_break_legacy(df, idx)
+    return arr
+
+
+def _mandatory_buy_rules_v4(df, start_offset, structure_mode='curve'):
+    """V4 激进必买：W底右侧 + 四类 V 反（与 V3 的 strategy 模块隔离）。"""
+    import talib
+    from v4_aggressive.strategy_vw import detect_w_right_bottom_events
+    from v4_aggressive import v4_v_rev_rules as v4r
+
     close = df['close'].values.astype(float)
+    open_ = df['open'].values.astype(float) if 'open' in df.columns else close.copy()
     high = df['high'].values.astype(float) if 'high' in df.columns else close
     low = df['low'].values.astype(float) if 'low' in df.columns else close
+    vol = df['volume'].values.astype(float) if 'volume' in df.columns else None
     n = len(close)
-    from strategy_vw_bottle_backtest import detect_w_right_bottom_events, detect_v_right_bottom_events
+
     w_flags = np.zeros(n, dtype=bool)
-    v_flags = np.zeros(n, dtype=bool)
-    for ev in detect_w_right_bottom_events(close, high, low, n):
+    v_right_flags = np.zeros(n, dtype=bool)
+    v4_aggr_needle_flags = np.zeros(n, dtype=bool)
+    v4_aggr_stabilize_flags = np.zeros(n, dtype=bool)
+    v4_aggr_gap_flags = np.zeros(n, dtype=bool)
+    v4_engulf_flags = np.zeros(n, dtype=bool)
+
+    if structure_mode == 'legacy':
+        from v4_aggressive.strategy_vw import (
+            detect_w_right_bottom_events_legacy,
+            detect_v_right_bottom_events_legacy,
+        )
+        w_events = detect_w_right_bottom_events_legacy(close, high, low, n)
+        v_events = detect_v_right_bottom_events_legacy(close, high, low, n)
+    else:
+        from v4_aggressive.strategy_vw import (
+            detect_w_right_bottom_events,
+            detect_v_right_bottom_events,
+        )
+        w_events = detect_w_right_bottom_events(close, high, low, n, open_=open_)
+        v_events = detect_v_right_bottom_events(close, high, low, n, open_=open_)
+
+    for ev in w_events:
         e = int(ev['entry'])
         if start_offset <= e < n:
             w_flags[e] = True
-    for ev in detect_v_right_bottom_events(close, high, low, n):
+    for ev in v_events:
         e = int(ev['entry'])
         if start_offset <= e < n:
-            v_flags[e] = True
+            v_right_flags[e] = True
+    ma5 = talib.MA(close, timeperiod=5)
+    ma20 = talib.MA(close, timeperiod=20)
+    for ev in v4r.detect_v4_aggressive_bottom_events(close, open_, high, low, n, ma5, ma20):
+        e = int(ev['entry'])
+        if not (start_offset <= e < n):
+            continue
+        rule = ev.get('_rule')
+        if rule == v4r.V4_AGGR_BOTTOM_NEEDLE:
+            v4_aggr_needle_flags[e] = True
+        elif rule == v4r.V4_AGGR_BOTTOM_STABILIZE:
+            v4_aggr_stabilize_flags[e] = True
+        elif rule == v4r.V4_AGGR_BOTTOM_GAP_YANG:
+            v4_aggr_gap_flags[e] = True
+    for sig in v4r.detect_v4_v_bottom_engulf_signal_indices(close, open_, high, low, n):
+        s = int(sig['signal'])
+        if s + 1 < n and start_offset <= s + 1 < n:
+            v4_engulf_flags[s + 1] = True
+
     _, _, _, _, base_mb = dwe.get_all_rules_extended()
     out = {k: v for k, v in base_mb.items() if k not in ('W底突破', 'V反底部')}
 
@@ -463,7 +517,11 @@ def _mandatory_buy_rules_v3(df, start_offset):
         return _f
 
     out['W底右侧'] = _mk_flag(w_flags)
-    out['V反右侧'] = _mk_flag(v_flags)
+    out['V反右侧'] = _mk_flag(v_right_flags)
+    out[v4r.V4_AGGR_BOTTOM_NEEDLE] = _mk_flag(v4_aggr_needle_flags)
+    out[v4r.V4_AGGR_BOTTOM_STABILIZE] = _mk_flag(v4_aggr_stabilize_flags)
+    out[v4r.V4_AGGR_BOTTOM_GAP_YANG] = _mk_flag(v4_aggr_gap_flags)
+    out[v4r.V4_V_REV_ENGULF_RULE_NAME] = _mk_flag(v4_engulf_flags)
     return out
 
 
@@ -477,7 +535,7 @@ def _mark_bs_points(df, buy_rules, sell_rules, mandatory_buy_rules,
                     start_offset=60, min_hold=2,
                     sell_trigger_count=2, confidence_medium=0.55,
                     precomputed_signals=None, atr_arr=None, high_vol_mask=None,
-                    engine_mode='v2'):
+                    bearish_candle_mode='slim'):
     close = df['close'].values.astype(float)
     open_ = df['open'].values.astype(float) if 'open' in df.columns else close
     high = df['high'].values.astype(float) if 'high' in df.columns else close
@@ -486,6 +544,11 @@ def _mark_bs_points(df, buy_rules, sell_rules, mandatory_buy_rules,
     bar_dates = df['date'].values if 'date' in df.columns else None
     ma20 = talib.MA(close, timeperiod=20)
     ma5 = talib.MA(close, timeperiod=5)
+    from v4_aggressive import v4_v_rev_rules as v4r
+    v4_aggr_stop_by_entry = v4r.build_aggressive_bottom_stop_by_entry(
+        close, open_, high, low, n, ma5, ma20,
+    )
+    v4_aggr_bottom_stop = None
 
     if precomputed_signals:
         buy_signals_pre = precomputed_signals['buy']
@@ -511,8 +574,40 @@ def _mark_bs_points(df, buy_rules, sell_rules, mandatory_buy_rules,
     trade_history = []
     reasons_list = []
     pending_buy = None
-    v3_golden_pit_entry = False
-    v3_gp_wait_break_m20 = False
+    v4_golden_pit_entry = False
+    v4_gp_wait_break_m20 = False
+    v4_aggr_bottom_exclusive = False
+    v4_aggr_ma5_below_streak = 0
+    v4_v_rev_ma20_suppress_track = False
+    v4_bearish_ma5_defer = False
+    v4_bearish_ma5_defer_kind = None
+    _legacy_bearish = bearish_candle_mode == 'legacy'
+
+    def _clear_v4_position_exits():
+        nonlocal v4_golden_pit_entry, v4_gp_wait_break_m20, v4_aggr_bottom_stop
+        nonlocal v4_aggr_bottom_exclusive, v4_aggr_ma5_below_streak
+        nonlocal v4_v_rev_ma20_suppress_track
+        nonlocal v4_bearish_ma5_defer, v4_bearish_ma5_defer_kind
+        v4_golden_pit_entry = False
+        v4_gp_wait_break_m20 = False
+        v4_aggr_bottom_stop = None
+        v4_aggr_bottom_exclusive = False
+        v4_aggr_ma5_below_streak = 0
+        v4_v_rev_ma20_suppress_track = False
+        v4_bearish_ma5_defer = False
+        v4_bearish_ma5_defer_kind = None
+
+    def _bind_aggr_bottom_on_buy(buy_idx, mbuy, bt=None):
+        nonlocal v4_aggr_bottom_stop, v4_aggr_bottom_exclusive, v4_aggr_ma5_below_streak
+        nonlocal v4_v_rev_ma20_suppress_track
+        if set(mbuy or []) & v4r.V4_AGGRESSIVE_BOTTOM_RULE_NAMES:
+            floor = v4_aggr_stop_by_entry.get(int(buy_idx))
+            v4_aggr_bottom_stop = float(floor) if floor is not None else None
+        else:
+            v4_aggr_bottom_stop = None
+        v4_aggr_bottom_exclusive = v4r.is_exclusive_aggressive_bottom_entry(mbuy, bt)
+        v4_aggr_ma5_below_streak = 0
+        v4_v_rev_ma20_suppress_track = v4r.is_v_rev_ma20_suppress_entry(mbuy, bt)
 
     for idx in range(start_offset, n):
         if pending_buy is not None:
@@ -521,55 +616,61 @@ def _mark_bs_points(df, buy_rules, sell_rules, mandatory_buy_rules,
             pending_buy = None
             rel = idx - signal_idx
 
-            # V3：双针探底 T+1 须阳线且收盘>MA5
-            if engine_mode == 'v3' and pending_meta.get('v3_double_needle_pending'):
+            # V4：双针探底 T+1 须阳线且收盘>MA5
+            if pending_meta.get('v4_double_needle_pending'):
                 if rel == 1 and dwe.confirm_double_needle_t1(df, idx):
                     if not dwe.upper_shadow_vetoes_buy_signal(df, idx):
                         trade_history.append((idx, 'B'))
                         signals.append((idx, 'B'))
-                        v3_golden_pit_entry = (
+                        _bind_aggr_bottom_on_buy(
+                            idx,
+                            prev_reasons.get('mandatory_buy_triggered', []),
+                            prev_reasons.get('buy_triggered', []),
+                        )
+                        v4_golden_pit_entry = (
                             '黄金坑' in prev_reasons.get('buy_triggered', []))
-                        v3_gp_wait_break_m20 = False
+                        v4_gp_wait_break_m20 = False
                         row = {
                             **prev_reasons, 'final_signal': 'B',
                             'confidence': round(prev_confidence, 3),
                             'level': prev_level, 'confirmed': True,
-                            'confirm_note': 'V3双针探底:T+1阳线且收盘>MA5确认B',
+                            'confirm_note': 'V4双针探底:T+1阳线且收盘>MA5确认B',
                         }
                         row['signal_date'] = _bar_date_str(bar_dates, signal_idx)
                         reasons_list.append(row)
                 continue
 
-            # V3：各类「仅下一交易日阳线确认」pending（收盘>开盘）
-            if engine_mode == 'v3':
-                v3_nd_handled = False
-                for meta_key, cnote in _V3_NEXTDAY_BULL_PENDING:
-                    if not pending_meta.get(meta_key):
-                        continue
-                    v3_nd_handled = True
-                    if rel == 1 and close[idx] > open_[idx]:
-                        trade_history.append((idx, 'B'))
-                        signals.append((idx, 'B'))
-                        if engine_mode == 'v3':
-                            v3_golden_pit_entry = (
-                                '黄金坑' in prev_reasons.get('buy_triggered', []))
-                            v3_gp_wait_break_m20 = False
-                        row = {
-                            **prev_reasons, 'final_signal': 'B',
-                            'confidence': round(prev_confidence, 3),
-                            'level': prev_level, 'confirmed': True,
-                            'confirm_note': cnote,
-                        }
-                        row['signal_date'] = _bar_date_str(bar_dates, signal_idx)
-                        reasons_list.append(row)
-                    break
-                if v3_nd_handled:
+            # V4：各类「仅下一交易日阳线确认」pending（收盘>开盘）
+            v4_nd_handled = False
+            for meta_key, cnote in _V4_NEXTDAY_BULL_PENDING:
+                if not pending_meta.get(meta_key):
                     continue
-
-            if engine_mode != 'v2':
+                v4_nd_handled = True
+                if rel == 1 and close[idx] > open_[idx]:
+                    trade_history.append((idx, 'B'))
+                    signals.append((idx, 'B'))
+                    _bind_aggr_bottom_on_buy(
+                        idx,
+                        prev_reasons.get('mandatory_buy_triggered', []),
+                        prev_reasons.get('buy_triggered', []),
+                    )
+                    v4_golden_pit_entry = (
+                        '黄金坑' in prev_reasons.get('buy_triggered', []))
+                    v4_gp_wait_break_m20 = False
+                    row = {
+                        **prev_reasons, 'final_signal': 'B',
+                        'confidence': round(prev_confidence, 3),
+                        'level': prev_level, 'confirmed': True,
+                        'confirm_note': cnote,
+                    }
+                    row['signal_date'] = _bar_date_str(bar_dates, signal_idx)
+                    reasons_list.append(row)
+                break
+            if v4_nd_handled:
                 continue
+            continue  # V4: no V2 T+2 confirm path
 
-            if 1 <= rel <= 2:
+            if False and 1 <= rel <= 2:  # dead: V2 path
                 floor = dwe.pending_buy_support_floor(
                     close, low, signal_idx, atr_arr, V2_ATR_STOP_MULT)
                 hold = dwe.pending_buy_lows_hold_since_signal(low, signal_idx, idx, floor)
@@ -620,13 +721,46 @@ def _mark_bs_points(df, buy_rules, sell_rules, mandatory_buy_rules,
 
         in_position = trade_history and trade_history[-1][1] == 'B'
 
+        if _legacy_bearish and in_position:
+            try:
+                _bk = dwe.detect_bearish_candle_pattern_kind(df, idx, mode='legacy')
+                if _bk in dwe.BEARISH_CANDLE_MA5_DEFER_KINDS and dwe.bearish_kind_defers_sell_until_ma5_break(
+                    df, idx, _bk,
+                ):
+                    v4_bearish_ma5_defer = True
+                    v4_bearish_ma5_defer_kind = _bk
+            except Exception:
+                pass
+
+        if _legacy_bearish and in_position and v4_bearish_ma5_defer and dwe.close_broke_below_ma5(df, idx):
+            v4_bearish_ma5_defer = False
+            _kind = v4_bearish_ma5_defer_kind
+            v4_bearish_ma5_defer_kind = None
+            _clear_v4_position_exits()
+            trade_history.append((idx, 'S'))
+            signals.append((idx, 'S'))
+            reasons_list.append({
+                'buy_triggered': [], 'sell_triggered': ['看跌K线形态'],
+                'mandatory_buy_triggered': [],
+                'mandatory_sell_triggered': [],
+                'buy_restriction_triggered': [],
+                'buy_score': 0.0, 'sell_score': 0.0, 'final_signal': 'S',
+                'confidence': 1.0, 'level': 'strong',
+                'sell_reason_type': dwe.V4_BEARISH_MA5_BREAK_SELL_REASON,
+                'bearish_pattern_kind': _kind,
+                'confirm_note': (
+                    f'V4{_kind or "看跌形态"}:收盘跌破MA5卖出'
+                    if _kind else 'V4看跌K线形态:收盘跌破MA5卖出'
+                ),
+            })
+            continue
+
         if atr_arr is not None and V2_ATR_STOP_ON and in_position:
             entry_idx, _ = trade_history[-1]
             _, epx = _exec_buy_fill(entry_idx, open_, close, n)
             ae = atr_arr[entry_idx] if entry_idx < n else np.nan
             if idx > entry_idx and not pd.isna(ae) and ae > 0 and low[idx] <= epx - V2_ATR_STOP_MULT * ae:
-                v3_golden_pit_entry = False
-                v3_gp_wait_break_m20 = False
+                _clear_v4_position_exits()
                 trade_history.append((idx, 'S'))
                 signals.append((idx, 'S'))
                 reasons_list.append({
@@ -640,8 +774,7 @@ def _mark_bs_points(df, buy_rules, sell_rules, mandatory_buy_rules,
         if in_position:
             entry_idx, _ = trade_history[-1]
             if idx > entry_idx and (idx - entry_idx) >= V2_MAX_HOLD_DAYS:
-                v3_golden_pit_entry = False
-                v3_gp_wait_break_m20 = False
+                _clear_v4_position_exits()
                 trade_history.append((idx, 'S'))
                 signals.append((idx, 'S'))
                 reasons_list.append({
@@ -652,16 +785,82 @@ def _mark_bs_points(df, buy_rules, sell_rules, mandatory_buy_rules,
                 })
                 continue
 
-        if engine_mode == 'v3' and in_position and v3_golden_pit_entry:
+        if in_position and v4_aggr_bottom_stop is not None:
+            entry_idx, _ = trade_history[-1]
+            if idx > entry_idx and float(close[idx]) < float(v4_aggr_bottom_stop):
+                stop_px = float(v4_aggr_bottom_stop)
+                _clear_v4_position_exits()
+                trade_history.append((idx, 'S'))
+                signals.append((idx, 'S'))
+                reasons_list.append({
+                    'buy_triggered': [], 'sell_triggered': [],
+                    'mandatory_buy_triggered': [],
+                    'mandatory_sell_triggered': [v4r.V4_AGGR_BOTTOM_STOP_SELL_REASON],
+                    'buy_restriction_triggered': [],
+                    'buy_score': 0.0, 'sell_score': 0.0, 'final_signal': 'S',
+                    'confidence': 1.0, 'level': 'strong',
+                    'sell_reason_type': v4r.V4_AGGR_BOTTOM_STOP_SELL_REASON,
+                    'v_bottom_stop': round(stop_px, 4),
+                })
+                continue
+
+        if in_position and v4_aggr_bottom_exclusive:
+            entry_idx, _ = trade_history[-1]
+            if idx > entry_idx:
+                m5v = ma5[idx]
+                if not pd.isna(m5v) and float(close[idx]) < float(m5v):
+                    v4_aggr_ma5_below_streak += 1
+                else:
+                    v4_aggr_ma5_below_streak = 0
+                if v4_aggr_ma5_below_streak >= 2:
+                    _clear_v4_position_exits()
+                    trade_history.append((idx, 'S'))
+                    signals.append((idx, 'S'))
+                    reasons_list.append({
+                        'buy_triggered': [], 'sell_triggered': [],
+                        'mandatory_buy_triggered': [],
+                        'mandatory_sell_triggered': [
+                            v4r.V4_AGGR_BOTTOM_MA5_2DAY_SELL_REASON,
+                        ],
+                        'buy_restriction_triggered': [],
+                        'buy_score': 0.0, 'sell_score': 0.0, 'final_signal': 'S',
+                        'confidence': 1.0, 'level': 'strong',
+                        'sell_reason_type': v4r.V4_AGGR_BOTTOM_MA5_2DAY_SELL_REASON,
+                    })
+                    continue
+
+        if in_position and v4_v_rev_ma20_suppress_track:
+            entry_idx, _ = trade_history[-1]
+            if idx > entry_idx:
+                if (
+                    v4r.held_below_ma20_since_entry(close, ma20, entry_idx, idx)
+                    and dwe.close_broke_below_ma5(df, idx)
+                ):
+                    _clear_v4_position_exits()
+                    trade_history.append((idx, 'S'))
+                    signals.append((idx, 'S'))
+                    reasons_list.append({
+                        'buy_triggered': [], 'sell_triggered': [],
+                        'mandatory_buy_triggered': [],
+                        'mandatory_sell_triggered': [
+                            v4r.V4_V_REV_MA20_SUPPRESS_SELL_REASON,
+                        ],
+                        'buy_restriction_triggered': [],
+                        'buy_score': 0.0, 'sell_score': 0.0, 'final_signal': 'S',
+                        'confidence': 1.0, 'level': 'strong',
+                        'sell_reason_type': v4r.V4_V_REV_MA20_SUPPRESS_SELL_REASON,
+                    })
+                    continue
+
+        if in_position and v4_golden_pit_entry:
             entry_idx, _ = trade_history[-1]
             if idx > entry_idx:
                 m20v = ma20[idx]
                 if not pd.isna(m20v):
                     m20f = float(m20v)
-                    if v3_gp_wait_break_m20:
+                    if v4_gp_wait_break_m20:
                         if close[idx] < m20f * 0.998:
-                            v3_golden_pit_entry = False
-                            v3_gp_wait_break_m20 = False
+                            _clear_v4_position_exits()
                             trade_history.append((idx, 'S'))
                             signals.append((idx, 'S'))
                             reasons_list.append({
@@ -671,16 +870,16 @@ def _mark_bs_points(df, buy_rules, sell_rules, mandatory_buy_rules,
                                 'buy_restriction_triggered': [],
                                 'buy_score': 0.0, 'sell_score': 0.0, 'final_signal': 'S',
                                 'confidence': 1.0, 'level': 'strong',
-                                'sell_reason_type': 'V3黄金坑破20日线卖出',
+                                'sell_reason_type': 'V4黄金坑破20日线卖出',
                             })
                             continue
                     else:
                         reached = close[idx] >= m20f * 0.998
                         breakout = close[idx] > m20f
                         if reached and breakout:
-                            v3_gp_wait_break_m20 = True
+                            v4_gp_wait_break_m20 = True
                         elif reached:
-                            v3_golden_pit_entry = False
+                            _clear_v4_position_exits()
                             trade_history.append((idx, 'S'))
                             signals.append((idx, 'S'))
                             reasons_list.append({
@@ -690,19 +889,34 @@ def _mark_bs_points(df, buy_rules, sell_rules, mandatory_buy_rules,
                                 'buy_restriction_triggered': [],
                                 'buy_score': 0.0, 'sell_score': 0.0, 'final_signal': 'S',
                                 'confidence': 1.0, 'level': 'strong',
-                                'sell_reason_type': 'V3黄金坑达到20日线卖出',
+                                'sell_reason_type': 'V4黄金坑达到20日线卖出',
                             })
                             continue
 
         triggered_buy = [name for name in buy_rules if buy_signals_pre.get(name, np.zeros(n, dtype=np.bool_))[idx]]
         triggered_sell = [name for name in sell_rules if sell_signals_pre.get(name, np.zeros(n, dtype=np.bool_))[idx]]
-        if engine_mode != 'v3':
-            triggered_sell = [
-                x for x in triggered_sell if x not in _V3_ONLY_WEIGHTED_SELL_RULE_NAMES
-            ]
         triggered_mandatory_buy = [name for name in mandatory_buy_rules if mandatory_buy_pre.get(name, np.zeros(n, dtype=np.bool_))[idx]]
         triggered_mandatory_sell = [name for name in mandatory_sell_rules if mandatory_sell_pre.get(name, np.zeros(n, dtype=np.bool_))[idx]]
         triggered_restriction = [name for name in buy_restriction_rules if restriction_pre.get(name, np.zeros(n, dtype=np.bool_))[idx]]
+
+        if _legacy_bearish and in_position and '看跌K线形态' in triggered_sell:
+            try:
+                _sk_ma5 = dwe.detect_bearish_candle_pattern_kind(df, idx, mode='legacy')
+                if _sk_ma5 and dwe.bearish_kind_defers_sell_until_ma5_break(df, idx, _sk_ma5):
+                    triggered_sell = [n for n in triggered_sell if n != '看跌K线形态']
+                    v4_bearish_ma5_defer = True
+                    v4_bearish_ma5_defer_kind = _sk_ma5
+            except Exception:
+                pass
+
+        # V4：趋势线阻力仅作辅助卖出，不可单独触发计数卖（含浮亏/回撤降为 1 条的情形）
+        if '趋势线阻力' in triggered_sell:
+            other_weighted_sells = [
+                n for n in triggered_sell
+                if n != '趋势线阻力' and sell_weights.get(n, 0) > 0
+            ]
+            if not other_weighted_sells:
+                triggered_sell = [n for n in triggered_sell if n != '趋势线阻力']
 
         buy_score = _capped_weight_sum(triggered_buy, buy_weights, PRD_BUY_RULE_GROUP, V2_GROUP_SCORE_CAP)
         sell_score = _capped_weight_sum(triggered_sell, sell_weights, PRD_SELL_RULE_GROUP, V2_GROUP_SCORE_CAP)
@@ -754,7 +968,12 @@ def _mark_bs_points(df, buy_rules, sell_rules, mandatory_buy_rules,
             confidence = buy_score / total if total > 0 else 0
 
         if candidate == 'B' and is_buy_restricted:
-            candidate = None
+            from v4_aggressive import v4_v_rev_rules as v4r
+            if not (
+                is_mandatory_buy
+                and set(triggered_mandatory_buy or []) & v4r.V4_V_REV_BUY_RULE_NAMES
+            ):
+                candidate = None
 
         if candidate is not None:
             if idx < 20 or pd.isna(ma20[idx]) or pd.isna(ma20[idx - 1]):
@@ -762,8 +981,13 @@ def _mark_bs_points(df, buy_rules, sell_rules, mandatory_buy_rules,
             else:
                 trend_down = (ma20[idx] < ma20[idx - 1]) and (close[idx] < ma20[idx])
                 if candidate == 'B' and trend_down:
-                    if engine_mode == 'v3' and (
-                        '黄金坑' in triggered_buy or '双针探底' in triggered_buy
+                    from v4_aggressive import v4_v_rev_rules as v4r
+                    mb_set = set(triggered_mandatory_buy or [])
+                    if (
+                        '黄金坑' in triggered_buy
+                        or '双针探底' in triggered_buy
+                        or (is_mandatory_buy and mb_set & v4r.V4_AGGRESSIVE_BOTTOM_RULE_NAMES)
+                        or (is_mandatory_buy and mb_set & v4r.V4_V_REV_BUY_RULE_NAMES)
                     ):
                         pass
                     else:
@@ -791,12 +1015,10 @@ def _mark_bs_points(df, buy_rules, sell_rules, mandatory_buy_rules,
                 elif idx - last_idx < mh:
                     candidate = None
 
-        if candidate == 'B' and dwe.upper_shadow_vetoes_buy_signal(df, idx):
-            if engine_mode != 'v3':
-                candidate = None
-
         if candidate == 'B' and dwe.breakthrough_prior_high_vetoes_buy(df, idx):
-            candidate = None
+            from v4_aggressive import v4_v_rev_rules as v4r
+            if not (set(triggered_mandatory_buy or []) & v4r.V4_V_REV_BUY_RULE_NAMES):
+                candidate = None
 
         reasons = {
             'buy_triggered': triggered_buy,
@@ -821,6 +1043,8 @@ def _mark_bs_points(df, buy_rules, sell_rules, mandatory_buy_rules,
                     reasons['bearish_pattern_kind'] = _sk
             except Exception:
                 pass
+        elif _legacy_bearish and v4_bearish_ma5_defer_kind:
+            reasons['bearish_pattern_kind'] = v4_bearish_ma5_defer_kind
 
         cm = confidence_medium
         if high_vol_mask is not None and idx < len(high_vol_mask) and high_vol_mask[idx]:
@@ -829,64 +1053,74 @@ def _mark_bs_points(df, buy_rules, sell_rules, mandatory_buy_rules,
         if candidate and confidence >= cm:
             level = 'strong' if confidence >= 0.75 else 'medium'
             if candidate == 'B':
-                if engine_mode == 'v3':
-                    mbuy = reasons.get('mandatory_buy_triggered', [])
-                    bt = reasons.get('buy_triggered', [])
-                    if '双针探底' in bt:
-                        pending_buy = (
-                            idx, reasons, confidence, level,
-                            {'v3_double_needle_pending': True},
-                        )
-                    elif reasons.get('bullish_pattern_kind') == '看涨吞没':
-                        pending_buy = (
-                            idx, reasons, confidence, level,
-                            {'v3_engulf_pending': True},
-                        )
-                    elif dwe.upper_shadow_vetoes_buy_signal(df, idx):
-                        pending_buy = (
-                            idx, reasons, confidence, level,
-                            {'v3_upper_shadow_pending': True},
-                        )
-                    elif '横盘整理向上突破' in bt:
-                        pending_buy = (
-                            idx, reasons, confidence, level,
-                            {'v3_box_break_pending': True},
-                        )
-                    elif 'N字形突破' in bt:
-                        pending_buy = (
-                            idx, reasons, confidence, level,
-                            {'v3_n_shape_pending': True},
-                        )
-                    elif '旗形突破' in mbuy:
-                        pending_buy = (
-                            idx, reasons, confidence, level,
-                            {'v3_flag_pending': True},
-                        )
-                    else:
-                        trade_history.append((idx, 'B'))
-                        signals.append((idx, 'B'))
-                        row = {**reasons, 'final_signal': 'B',
-                               'confidence': round(confidence, 3),
-                               'level': level, 'confirmed': True,
-                               'confirm_note': 'V3即时买入(无T+1/T+2确认)'}
-                        reasons_list.append(row)
-                        if engine_mode == 'v3':
-                            v3_golden_pit_entry = (
-                                '黄金坑' in reasons.get('buy_triggered', []))
-                            v3_gp_wait_break_m20 = False
-                elif pending_buy is None:
-                    pending_meta = {}
-                    bt_trig = reasons.get('buy_triggered', [])
-                    if '双针探底' in bt_trig:
-                        pending_meta['double_needle_defer'] = True
-                    elif '看涨K线形态' in bt_trig:
-                        pending_meta['bull_pattern_defer'] = True
-                        if not _signal_day_volume_effective(df, idx):
-                            pending_meta['weak_vol_bull_pattern'] = True
-                    pending_buy = (idx, reasons, confidence, level, pending_meta)
+                from v4_aggressive import v4_v_rev_rules as v4r
+                mbuy = reasons.get('mandatory_buy_triggered', [])
+                bt = reasons.get('buy_triggered', [])
+                _v4_mbuy_immediate = (
+                    'V反右侧' in mbuy
+                    or bool(set(mbuy) & v4r.V4_AGGRESSIVE_BOTTOM_RULE_NAMES)
+                )
+                if '双针探底' in bt:
+                    pending_buy = (
+                        idx, reasons, confidence, level,
+                        {'v4_double_needle_pending': True},
+                    )
+                elif v4r.V4_V_REV_ENGULF_RULE_NAME in mbuy:
+                    pending_buy = (
+                        idx, reasons, confidence, level,
+                        {'v4_v_rev_engulf_pending': True},
+                    )
+                elif reasons.get('bullish_pattern_kind') == '看涨吞没':
+                    pending_buy = (
+                        idx, reasons, confidence, level,
+                        {'v4_engulf_pending': True},
+                    )
+                elif dwe.upper_shadow_vetoes_buy_signal(df, idx) and not _v4_mbuy_immediate:
+                    pending_buy = (
+                        idx, reasons, confidence, level,
+                        {'v4_upper_shadow_pending': True},
+                    )
+                elif '横盘整理向上突破' in bt:
+                    pending_buy = (
+                        idx, reasons, confidence, level,
+                        {'v4_box_break_pending': True},
+                    )
+                elif 'N字形突破' in bt:
+                    pending_buy = (
+                        idx, reasons, confidence, level,
+                        {'v4_n_shape_pending': True},
+                    )
+                elif '旗形突破' in mbuy:
+                    pending_buy = (
+                        idx, reasons, confidence, level,
+                        {'v4_flag_pending': True},
+                    )
+                else:
+                    trade_history.append((idx, 'B'))
+                    signals.append((idx, 'B'))
+                    row = {**reasons, 'final_signal': 'B',
+                           'confidence': round(confidence, 3),
+                           'level': level, 'confirmed': True,
+                           'confirm_note': 'V4即时买入(无T+1/T+2确认)'}
+                    _bind_aggr_bottom_on_buy(
+                        idx,
+                        reasons.get('mandatory_buy_triggered', []),
+                        reasons.get('buy_triggered', []),
+                    )
+                    if v4_aggr_bottom_stop is not None:
+                        row['v_bottom_stop'] = round(v4_aggr_bottom_stop, 4)
+                    if v4_aggr_bottom_exclusive:
+                        row['aggr_bottom_exclusive'] = True
+                    reasons_list.append(row)
+                    v4_golden_pit_entry = (
+                        '黄金坑' in reasons.get('buy_triggered', []))
+                    v4_gp_wait_break_m20 = False
             else:
-                v3_golden_pit_entry = False
-                v3_gp_wait_break_m20 = False
+                if candidate == 'S':
+                    _clear_v4_position_exits()
+                else:
+                    v4_golden_pit_entry = False
+                    v4_gp_wait_break_m20 = False
                 trade_history.append((idx, candidate))
                 signals.append((idx, candidate))
                 reasons_list.append({**reasons, 'final_signal': candidate,
@@ -1231,12 +1465,21 @@ def calculate_weights_v2(df, max_iterations=100):
 # 分析功能
 # ============================================================
 
-def analyze_signals_v2(df, precomputed_weights=None, start_date=None, end_date=None,
-                       engine_mode='v2', mandatory_buy_rules_override=None):
+def analyze_signals_v4_aggressive(df, precomputed_weights=None, start_date=None, end_date=None,
+                       mandatory_buy_rules_override=None, bearish_candle_mode='slim',
+                       structure_mode='curve'):
+    """V4 激进独立分析入口；勿与 engine_v2 混用。"""
+    from v4_aggressive.v4_structure_curves import reset_structure_registry_cache
+
+    reset_structure_registry_cache()
+    start_offset = 60
+    if mandatory_buy_rules_override is None:
+        mandatory_buy_rules_override = _mandatory_buy_rules_v4(
+            df, start_offset, structure_mode=structure_mode,
+        )
     buy_rules, sell_rules = dwe.get_all_rules()
     _, _, mandatory_sell_rules, buy_restriction_rules, mandatory_buy_rules = dwe.get_all_rules_extended()
-    if mandatory_buy_rules_override is not None:
-        mandatory_buy_rules = mandatory_buy_rules_override
+    mandatory_buy_rules = mandatory_buy_rules_override
 
     if precomputed_weights:
         buy_weights = precomputed_weights.get('buy_weights', {})
@@ -1255,6 +1498,8 @@ def analyze_signals_v2(df, precomputed_weights=None, start_date=None, end_date=N
     start_offset = 60
     atr_arr = talib.ATR(high, low, close, timeperiod=V2_ATR_PERIOD) if V2_ATR_STOP_ON else None
     hvm = _precompute_high_vol_mask(close, high, low, start_offset)
+    from v4_aggressive.bearish_candle_modes import precompute_bearish_pattern_series
+
     precomputed = {
         'buy': _precompute_rule_signals(df, buy_rules, start_offset),
         'sell': _precompute_rule_signals(df, sell_rules, start_offset),
@@ -1262,6 +1507,19 @@ def analyze_signals_v2(df, precomputed_weights=None, start_date=None, end_date=N
         'mandatory_sell': _precompute_rule_signals(df, mandatory_sell_rules, start_offset),
         'restriction': _precompute_rule_signals(df, buy_restriction_rules, start_offset),
     }
+    if '看跌K线形态' in sell_rules:
+        precomputed['sell']['看跌K线形态'] = precompute_bearish_pattern_series(
+            df, start_offset, mode=bearish_candle_mode,
+        )
+    if structure_mode == 'legacy':
+        if 'M顶跌破' in mandatory_sell_rules:
+            precomputed['mandatory_sell']['M顶跌破'] = _legacy_mandatory_sell_series(
+                df, 'M顶跌破', start_offset,
+            )
+        if 'V反顶部' in mandatory_sell_rules:
+            precomputed['mandatory_sell']['V反顶部'] = _legacy_mandatory_sell_series(
+                df, 'V反顶部', start_offset,
+            )
 
     signals, reasons_list = _mark_bs_points(
         df, buy_rules, sell_rules,
@@ -1270,7 +1528,8 @@ def analyze_signals_v2(df, precomputed_weights=None, start_date=None, end_date=N
         precomputed_signals=precomputed,
         atr_arr=atr_arr,
         high_vol_mask=hvm,
-        engine_mode=engine_mode)
+        bearish_candle_mode=bearish_candle_mode,
+    )
 
     paired_signals = []
     buy_idx = None
@@ -1314,9 +1573,24 @@ def analyze_signals_v2(df, precomputed_weights=None, start_date=None, end_date=N
                 bi = dwe.bar_index_from_date_str(df, reasons['signal_date'])
                 if bi is not None:
                     sig_bar_idx = bi
-            b_row.update(dwe.signal_extreme_annotation(
+            from v4_aggressive import signal_rule_context as src
+            ann = dwe.signal_extreme_annotation(
                 df, sig_bar_idx, anchor_bar_idx=idx, buy_triggered=buy_disp + mand_buy,
-            ))
+            )
+            ann = src.enrich_extreme_with_next_prior_high(df, sig_bar_idx, ann)
+            b_row.update(ann)
+            all_buy_rules = buy_disp + mand_buy
+            b_row['rule_details'] = src.build_signal_rule_details(
+                df, idx, all_buy_rules, buy_side=True,
+            )
+            vs = src.build_v_structure_snapshot(df, idx, all_buy_rules)
+            if vs:
+                b_row['v_structure'] = vs
+            ws = src.build_w_structure_snapshot(df, idx)
+            if ws:
+                b_row['w_structure'] = ws
+            if reasons.get('v_bottom_stop') is not None:
+                b_row['v_bottom_stop'] = reasons['v_bottom_stop']
             paired_signals.append(b_row)
         elif sig == 'S' and buy_idx is not None:
             _, ea = _exec_buy_fill(buy_idx, open_vals, close, n)
@@ -1345,7 +1619,14 @@ def analyze_signals_v2(df, precomputed_weights=None, start_date=None, end_date=N
                 bi_s = dwe.bar_index_from_date_str(df, reasons['signal_date'])
                 if bi_s is not None:
                     sig_bar_idx_s = bi_s
-            s_row.update(dwe.signal_extreme_annotation(df, sig_bar_idx_s, anchor_bar_idx=idx))
+            from v4_aggressive import signal_rule_context as src
+            ann_s = dwe.signal_extreme_annotation(df, sig_bar_idx_s, anchor_bar_idx=idx)
+            ann_s = src.enrich_extreme_with_next_prior_high(df, sig_bar_idx_s, ann_s)
+            s_row.update(ann_s)
+            s_row['rule_details'] = src.build_signal_rule_details(
+                df, sig_bar_idx_s, sell_disp + mand_sell, buy_side=False,
+            )
+            src.append_engine_sell_details(s_row, reasons)
             paired_signals.append(s_row)
             buy_idx = None
 
@@ -1402,23 +1683,8 @@ def analyze_signals_v2(df, precomputed_weights=None, start_date=None, end_date=N
         'rule_stats': {},
         'depth_used': len(df),
         'summary': {'total_signals': len(paired_signals), 'buy_count': sum(1 for s in paired_signals if s['type'] == 'B'), 'sell_count': sum(1 for s in paired_signals if s['type'] == 'S')},
-        'engine_mode': engine_mode,
+        'engine_mode': 'v4',
     }
-
-
-def analyze_signals_dual(df, precomputed_weights=None, start_date=None, end_date=None):
-    from v4_aggressive.engine import analyze_signals_v4_aggressive
-
-    start_offset = 60
-    mb_v3 = _mandatory_buy_rules_v3(df, start_offset)
-    r2 = analyze_signals_v2(df, precomputed_weights, start_date, end_date, engine_mode='v2')
-    r3 = analyze_signals_v2(df, precomputed_weights, start_date, end_date,
-                            engine_mode='v3', mandatory_buy_rules_override=mb_v3)
-    r4 = analyze_signals_v4_aggressive(df, precomputed_weights, start_date, end_date)
-    r2['portfolio_sim'] = _portfolio_sim_from_paired(r2['paired_signals'])
-    r3['portfolio_sim'] = _portfolio_sim_from_paired(r3['paired_signals'])
-    r4['portfolio_sim'] = _portfolio_sim_from_paired(r4['paired_signals'])
-    return {'v2': r2, 'v3': r3, 'v4': r4}
 
 
 def get_conditions():
@@ -1434,10 +1700,21 @@ def get_conditions():
             {'name': '高波动', 'description': 'ATR/收盘高于历史中位数时，买入置信阈值提高、最小持有略延长'},
         ],
         'buy_sufficient': [
-            {'name': '关键形态必买', 'description': 'W底突破、头肩底突破、V反底部、旗形突破；其中「V反底部」须收复左侧跌前参考高点一定比例（左侧压力取低点前最多5根K之最高）、若已站上MA20则须自低点以来出现过对MA20的回踩且收盘仍在其上，且排除连阳缩量链'},
-            {'name': '加权买入', 'description': '分组 cap 后 buy_score > sell_score 且 buy_score > 0；其中「看涨K线形态」在结果中附带 TA-Lib 子形态名；「刺透」须同日共振；「MACD金叉」「MACD底背离」「价升量增」须同日另有看涨K线形态、形态学（黄金坑/双针/N字等）或突破（含放量突破高点、必买形态）'},
-            {'name': '双针探底', 'description': '须在V/W左侧底部附近、跌段总跌幅≥4%；第一根针在信号日前(下影/实体>=0.8)，第二根针=信号日(阳线且下影/实体>=0.8)；两针低点均为V/W底区最低且相差<0.5%；T+1阳线且收盘>MA5确认B'},
-            {'name': 'N字形突破', 'description': '不可单独脱离结构：须在最近 W底右侧 或 V反右侧 背景下，前高=右侧起点至信号日(含)的 high 最高值；曾触瓶口后 N 字回踩再突破（W 须 high 突破至昨前高，V 为瓶口回踩收阳），带量'},
+            {'name': '关键形态必买', 'description': 'W底右侧 + V反右侧 + V反激进底部三条 + V4V反吞没；不含旧版「W底突破/V反底部」颈线突破标签'},
+            {'name': 'V反右侧（经典）', 'description': '四曲线+ATR 摆动低点；瓶口=左肩摆动高点至 V 底 high 最大；跌深≥4%(均价)；右侧扫60根'},
+            {'name': 'W底右侧', 'description': '与 V 同 registry：ATR 摆动低点双底配对；颈线=两底间 high 最大；颈线上弹≥3%；右侧扫60根'},
+            {'name': 'M顶跌破', 'description': 'ATR 摆动高点双顶配对；跌破顶部98%必卖'},
+            {'name': 'V反顶部', 'description': 'ATR 摆动高点为峰；左侧均价抬升≥7%；右侧回落≥3%后跌破峰×98%'},
+            {'name': 'V反激进底-金针', 'description': 'V 左侧金针探底阳线（通用锤子线：收阳、下影≥振幅1/3、下影≥0.75×实体、上影≤振幅45%），影线最低点为 V 底最低；前低支撑则信号日买，否则次日阳线且收盘高于金针则次日买；确认买入日 (MA20−最高价)/最高价>3%'},
+            {'name': 'V反激进底-止跌', 'description': 'V 左侧下跌动能减弱、典型价止跌，收盘价站上 MA5，且确认日 (MA20−最高价)/最高价>3%，信号日直接买入'},
+            {'name': 'V反激进底-大低开阳', 'description': 'V 左侧大低开大阳线；前低支撑或次日阳线收盘高于该阳线则确认；确认买入日 (MA20−最高价)/最高价>2%'},
+            {'name': 'V反激进底动态止损', 'description': '由 V反激进底-金针/止跌/大低开阳 买入的仓位：止损价=V 反底部区间最低点；持仓期间若收盘价低于该最低点，强制卖出（标签「V反激进底破V底止损」）'},
+            {'name': 'V反激进底破5日线', 'description': '仅当买入日有且仅有 V反激进底 三条之一（无其它必买/加权买入叠加）：买入后若连续 2 个相邻交易日收盘价均跌破 MA5，第 2 日收盘卖出（标签「V反激进底连2日破5日线」）'},
+            {'name': 'V反持压20破5日必卖', 'description': '由 V反右侧 或 V反底部 买入的仓位：自买入日次日起每个交易日收盘均在 MA20 下方（一直被压制），当日收盘跌破 MA5 则强制卖出（标签「V反持压20破5日必卖」）'},
+            {'name': 'V4V反吞没', 'description': 'V 底区出现吞没大阳线为信号日，次日收阳确认后于次日买入；标签「V4V反吞没」'},
+            {'name': '加权买入', 'description': '分组 cap 后 buy_score > sell_score；MACD/价升量增须配合看涨形态或突破；与 V3 相同 T+1 确认路径（吞没/长上影/N字/旗形等）'},
+            {'name': '双针探底', 'description': 'V/W 左侧跌≥4%；第一针在信号日前(下影/实体≥0.8)，第二针=信号日；两针低点贴 V/W 底且价差<0.5%；T+1 阳线且收盘>MA5 确认 B'},
+            {'name': 'N字形突破', 'description': '须在 W底右侧 或 V反右侧 背景下；前高=右侧至信号日 high 最高；触瓶口后 N 字回踩再突破，带量'},
         ],
         'sell_necessary': [
             {'name': '当前持仓', 'description': '最近一个信号为B'},
@@ -1445,8 +1722,8 @@ def get_conditions():
         'sell_sufficient': [
             {'name': '关键形态必卖', 'description': 'M顶跌破、V反顶部、旗形跌破、均线趋势打破必卖；高位压力带+放巨量阴线（高位放量阴线看跌）立即必卖，不须等跌破5日线'},
             {'name': '沿均线主升破位', 'description': '识别主升贴 MA5/10/20 后首次跌破对应均线，计入卖出规则加权分（需满足计数卖等条件）'},
-            {'name': '计数卖出', 'description': '≥2条卖出规则触发且sell_score > buy_score；浮亏超阈值时降为1条'},
-            {'name': '黄昏星缩量过滤', 'description': '「看跌K线形态」子形态为黄昏星时：若前一日为阳线(收盘>开盘)且当日成交量小于前一日，则不因该形态触发卖出（其它卖出规则仍可S）'},
+            {'name': '计数卖出', 'description': '≥2条卖出规则触发且sell_score > buy_score；浮亏超阈值时降为1条；趋势线阻力不可单独构成卖出'},
+            {'name': '看跌K线形态', 'description': '仅看跌吞没、上吊线、乌云盖顶；上吊线须收盘在20日均线上方；不含黄昏星/黄昏十字/射击之星及守MA5延迟卖'},
             {'name': 'ATR止损', 'description': '跌破入场价−k×ATR(14)强制平仓'},
             {'name': '时间止损', 'description': f'持仓超过约{V2_MAX_HOLD_DAYS}个交易日强制平仓'},
         ],
@@ -1454,71 +1731,3 @@ def get_conditions():
             {'name': 'PRD效用U', 'description': '迭代选优以 U=Σr−λ1·MDD−λ2·下行波动−λ3·笔数−λ4·L1权重 为主（可关 V2_PRD_UTILITY_OBJECTIVE）'},
         ],
     }
-
-
-# ============================================================
-# 持久化
-# ============================================================
-
-def save_weights(stock_code, result):
-    doc = {
-        'stock_code': stock_code,
-        'buy_weights': result['buy_weights'],
-        'sell_weights': result['sell_weights'],
-        'buy_details': result['buy_details'],
-        'sell_details': result['sell_details'],
-        'iteration_count': result['iteration_count'],
-        'total_return': result['total_return'],
-        'win_rate': result['win_rate'],
-        'updated_at': datetime.now(),
-    }
-    for k in ('prd_utility', 'prd_max_drawdown'):
-        if k in result:
-            doc[k] = result[k]
-    weights_v2_collection.update_one(
-        {'stock_code': stock_code},
-        {'$set': doc, '$setOnInsert': {'created_at': datetime.now()}},
-        upsert=True
-    )
-
-
-def load_weights(stock_code):
-    return weights_v2_collection.find_one({'stock_code': stock_code}, {'_id': 0})
-
-
-def delete_weights(stock_code):
-    weights_v2_collection.delete_one({'stock_code': stock_code})
-
-
-def save_signals(stock_code, signals_data):
-    if isinstance(signals_data, dict) and 'v2' in signals_data and 'v3' in signals_data:
-        doc = {
-            'stock_code': stock_code,
-            'signals': signals_data['v2']['paired_signals'],
-            'signals_v3': signals_data['v3']['paired_signals'],
-            'portfolio_v2': signals_data['v2'].get('portfolio_sim'),
-            'portfolio_v3': signals_data['v3'].get('portfolio_sim'),
-            'updated_at': datetime.now(),
-        }
-        if 'v4' in signals_data and signals_data['v4']:
-            doc['signals_v4'] = signals_data['v4']['paired_signals']
-            doc['portfolio_v4'] = signals_data['v4'].get('portfolio_sim')
-    else:
-        doc = {
-            'stock_code': stock_code,
-            'signals': signals_data,
-            'updated_at': datetime.now(),
-        }
-    signals_v2_collection.update_one(
-        {'stock_code': stock_code},
-        {'$set': doc, '$setOnInsert': {'created_at': datetime.now()}},
-        upsert=True
-    )
-
-
-def load_signals(stock_code):
-    return signals_v2_collection.find_one({'stock_code': stock_code}, {'_id': 0})
-
-
-def delete_signals(stock_code):
-    signals_v2_collection.delete_one({'stock_code': stock_code})

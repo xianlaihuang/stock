@@ -53,17 +53,36 @@ def _aggregate_period_from_daily(daily_klines, period):
         })
     return result
 
+def _upsert_minute_klines(code, kline_data):
+    """按交易日 upsert 分时，避免整表 delete 后拉取失败导致历史分时全丢。"""
+    from collections import defaultdict
+    if not kline_data:
+        return 0
+    by_day = defaultdict(list)
+    for k in kline_data:
+        ds = str(k.get('date', '')).strip()
+        if len(ds) < 10:
+            continue
+        by_day[ds[:10]].append(k)
+    if not by_day:
+        return 0
+    KlineData.delete_for_calendar_days(code, 'minute', list(by_day.keys()))
+    total = 0
+    for rows in by_day.values():
+        if KlineData.add_many(code, rows, period='minute'):
+            total += len(rows)
+    return total
+
+
 def _scrape_stock_data_internal(code):
     periods = ['day', 'minute', 'week', 'month', 'year']
     new_kline_count = 0
     day_klines = None
     for period in periods:
         if period == 'minute':
-            KlineData.delete(code, period='minute')
             kline_data = StockScraper.get_kline_data(code, period='minute')
             if kline_data:
-                new_kline_count += len(kline_data)
-                KlineData.add_many(code, kline_data, period='minute')
+                new_kline_count += _upsert_minute_klines(code, kline_data)
             continue
 
         existing_klines = KlineData.get(code, period=period)
@@ -108,9 +127,7 @@ def _sync_one_period_kline(code, period):
             kline_data = StockScraper.get_kline_data(code, period='minute')
             if not kline_data:
                 return 0
-            KlineData.delete(code, period='minute')
-            KlineData.add_many(code, kline_data, period='minute')
-            return len(kline_data)
+            return _upsert_minute_klines(code, kline_data)
         except Exception as e:
             print(f"[sync minute] {code}: {e}")
             return 0
