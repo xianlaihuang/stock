@@ -578,7 +578,6 @@ def _mark_bs_points(df, buy_rules, sell_rules, mandatory_buy_rules,
     v4_gp_wait_break_m20 = False
     v4_aggr_bottom_exclusive = False
     v4_aggr_ma5_below_streak = 0
-    v4_v_rev_ma20_suppress_track = False
     v4_bearish_ma5_defer = False
     v4_bearish_ma5_defer_kind = None
     _legacy_bearish = bearish_candle_mode == 'legacy'
@@ -586,20 +585,17 @@ def _mark_bs_points(df, buy_rules, sell_rules, mandatory_buy_rules,
     def _clear_v4_position_exits():
         nonlocal v4_golden_pit_entry, v4_gp_wait_break_m20, v4_aggr_bottom_stop
         nonlocal v4_aggr_bottom_exclusive, v4_aggr_ma5_below_streak
-        nonlocal v4_v_rev_ma20_suppress_track
         nonlocal v4_bearish_ma5_defer, v4_bearish_ma5_defer_kind
         v4_golden_pit_entry = False
         v4_gp_wait_break_m20 = False
         v4_aggr_bottom_stop = None
         v4_aggr_bottom_exclusive = False
         v4_aggr_ma5_below_streak = 0
-        v4_v_rev_ma20_suppress_track = False
         v4_bearish_ma5_defer = False
         v4_bearish_ma5_defer_kind = None
 
     def _bind_aggr_bottom_on_buy(buy_idx, mbuy, bt=None):
         nonlocal v4_aggr_bottom_stop, v4_aggr_bottom_exclusive, v4_aggr_ma5_below_streak
-        nonlocal v4_v_rev_ma20_suppress_track
         if set(mbuy or []) & v4r.V4_AGGRESSIVE_BOTTOM_RULE_NAMES:
             floor = v4_aggr_stop_by_entry.get(int(buy_idx))
             v4_aggr_bottom_stop = float(floor) if floor is not None else None
@@ -607,7 +603,6 @@ def _mark_bs_points(df, buy_rules, sell_rules, mandatory_buy_rules,
             v4_aggr_bottom_stop = None
         v4_aggr_bottom_exclusive = v4r.is_exclusive_aggressive_bottom_entry(mbuy, bt)
         v4_aggr_ma5_below_streak = 0
-        v4_v_rev_ma20_suppress_track = v4r.is_v_rev_ma20_suppress_entry(mbuy, bt)
 
     for idx in range(start_offset, n):
         if pending_buy is not None:
@@ -826,29 +821,6 @@ def _mark_bs_points(df, buy_rules, sell_rules, mandatory_buy_rules,
                         'buy_score': 0.0, 'sell_score': 0.0, 'final_signal': 'S',
                         'confidence': 1.0, 'level': 'strong',
                         'sell_reason_type': v4r.V4_AGGR_BOTTOM_MA5_2DAY_SELL_REASON,
-                    })
-                    continue
-
-        if in_position and v4_v_rev_ma20_suppress_track:
-            entry_idx, _ = trade_history[-1]
-            if idx > entry_idx:
-                if (
-                    v4r.held_below_ma20_since_entry(close, ma20, entry_idx, idx)
-                    and dwe.close_broke_below_ma5(df, idx)
-                ):
-                    _clear_v4_position_exits()
-                    trade_history.append((idx, 'S'))
-                    signals.append((idx, 'S'))
-                    reasons_list.append({
-                        'buy_triggered': [], 'sell_triggered': [],
-                        'mandatory_buy_triggered': [],
-                        'mandatory_sell_triggered': [
-                            v4r.V4_V_REV_MA20_SUPPRESS_SELL_REASON,
-                        ],
-                        'buy_restriction_triggered': [],
-                        'buy_score': 0.0, 'sell_score': 0.0, 'final_signal': 'S',
-                        'confidence': 1.0, 'level': 'strong',
-                        'sell_reason_type': v4r.V4_V_REV_MA20_SUPPRESS_SELL_REASON,
                     })
                     continue
 
@@ -1710,7 +1682,6 @@ def get_conditions():
             {'name': 'V反激进底-大低开阳', 'description': 'V 左侧大低开大阳线；前低支撑或次日阳线收盘高于该阳线则确认；确认买入日 (MA20−最高价)/最高价>2%'},
             {'name': 'V反激进底动态止损', 'description': '由 V反激进底-金针/止跌/大低开阳 买入的仓位：止损价=V 反底部区间最低点；持仓期间若收盘价低于该最低点，强制卖出（标签「V反激进底破V底止损」）'},
             {'name': 'V反激进底破5日线', 'description': '仅当买入日有且仅有 V反激进底 三条之一（无其它必买/加权买入叠加）：买入后若连续 2 个相邻交易日收盘价均跌破 MA5，第 2 日收盘卖出（标签「V反激进底连2日破5日线」）'},
-            {'name': 'V反持压20破5日必卖', 'description': '由 V反右侧 或 V反底部 买入的仓位：自买入日次日起每个交易日收盘均在 MA20 下方（一直被压制），当日收盘跌破 MA5 则强制卖出（标签「V反持压20破5日必卖」）'},
             {'name': 'V4V反吞没', 'description': 'V 底区出现吞没大阳线为信号日，次日收阳确认后于次日买入；标签「V4V反吞没」'},
             {'name': '加权买入', 'description': '分组 cap 后 buy_score > sell_score；MACD/价升量增须配合看涨形态或突破；与 V3 相同 T+1 确认路径（吞没/长上影/N字/旗形等）'},
             {'name': '双针探底', 'description': 'V/W 左侧跌≥4%；第一针在信号日前(下影/实体≥0.8)，第二针=信号日；两针低点贴 V/W 底且价差<0.5%；T+1 阳线且收盘>MA5 确认 B'},

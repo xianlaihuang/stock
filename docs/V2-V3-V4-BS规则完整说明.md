@@ -493,7 +493,6 @@ Pending 通用 floor（与 V2 相同思想）：确认期 low 不破 `max(min(lo
 |------------------|------|---------|
 | V反激进底破V底止损 | 买入含激进底；`close < v_bottom_stop`（V 左区 `min(low)`） | ≠V3 |
 | V反激进底连2日破5日线 | **仅** `is_exclusive_aggressive_bottom_entry`；连续 2 日 `close < MA5` | ≠V3 |
-| V反持压20破5日必卖 | **V反右侧** 或 **V反底部** 买入；自买入日次日起至卖出日每个交易日 `close < MA20`；卖出日 `close < MA5` | ≠V3 |
 | V4黄金坑达到20日线卖出 | 同 V3 逻辑 | 标签 `V4*` |
 | V4黄金坑破20日线卖出 | 同 V3 逻辑 | 标签 `V4*` |
 | 看跌K线形态破5日线 | `v4_bearish_ma5_defer` 后收盘破 MA5 | ≠V3 |
@@ -506,9 +505,8 @@ Pending 通用 floor（与 V2 相同思想）：确认期 low 不破 `max(min(lo
 
 1. 激进底破 V 底  
 2. 纯激进底连 2 日破 MA5  
-3. V反右侧/底部 + 持压 MA20 后破 MA5 必卖  
-4. 黄金坑 MA20 两阶段  
-5. 看跌形态破 MA5（defer 兑现）  
+3. 黄金坑 MA20 两阶段  
+4. 看跌形态破 MA5（defer 兑现）  
 
 其余：ATR 止损、时间止损、必卖、计数卖、空仓必买/加权买 — 与 V2/V3 一致。
 

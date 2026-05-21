@@ -35,37 +35,6 @@ V4_AGGR_BOTTOM_STOP_SELL_REASON = 'V反激进底破V底止损'
 # 仅「纯激进底」买入：连续 2 个交易日收盘跌破 MA5 则卖
 V4_AGGR_BOTTOM_MA5_2DAY_SELL_REASON = 'V反激进底连2日破5日线'
 
-# V反右侧 / V反底部 买入后一直被 MA20 压制，收盘破 MA5 则必卖
-V4_V_REV_MA20_SUPPRESS_ENTRY_NAMES = frozenset({'V反右侧', 'V反底部'})
-V4_V_REV_MA20_SUPPRESS_SELL_REASON = 'V反持压20破5日必卖'
-
-
-def is_v_rev_ma20_suppress_entry(mandatory_buy_triggered, buy_triggered=None):
-    """买入由 V反右侧 或 V反底部 触发（必买或加权标签）。"""
-    mb = set(mandatory_buy_triggered or [])
-    bt = set(buy_triggered or [])
-    return bool(mb & V4_V_REV_MA20_SUPPRESS_ENTRY_NAMES) or bool(
-        bt & V4_V_REV_MA20_SUPPRESS_ENTRY_NAMES
-    )
-
-
-def held_below_ma20_since_entry(close, ma20, entry_idx, idx, eps=1e-9):
-    """
-    自买入日次日起至 idx（含），每个交易日收盘均在 MA20 下方。
-    """
-    entry_idx = int(entry_idx)
-    idx = int(idx)
-    if idx <= entry_idx:
-        return False
-    for j in range(entry_idx + 1, idx + 1):
-        cj = float(close[j])
-        mj = float(ma20[j])
-        if np.isnan(mj) or mj <= 0 or np.isnan(cj):
-            return False
-        if cj >= mj * (1.0 - eps):
-            return False
-    return True
-
 
 def is_exclusive_aggressive_bottom_entry(mandatory_buy_triggered, buy_triggered=None):
     """
