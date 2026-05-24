@@ -353,6 +353,56 @@ def _heavy_volume_yin_bar(df, idx, prev_vol_mult=1.5):
     return v_cur > prev_vol_mult * v_prev
 
 
+# V4：高开低走长阴 + 历史压力带 → 必卖（不要求相对前一日放量）
+GAP_UP_LONG_YIN_MIN_GAP_PCT = 0.003
+GAP_UP_LONG_YIN_BODY_RANGE_MIN = 0.28
+GAP_UP_LONG_YIN_WALK_DOWN_MIN = 0.30
+
+
+def _gap_up_long_yin_bar(
+    df, idx,
+    min_gap_pct=None,
+    min_body_range_ratio=None,
+    min_walk_down_ratio=None,
+):
+    """
+    高开低走长阴：相对前收跳空高开；收阴；实体占振幅足够；自开盘向低位回落明显。
+    """
+    if idx < 1:
+        return False
+    close = df['close'].values.astype(float)
+    open_ = df['open'].values.astype(float) if 'open' in df.columns else close
+    high = df['high'].values.astype(float) if 'high' in df.columns else close
+    low = df['low'].values.astype(float) if 'low' in df.columns else close
+    min_gap_pct = min_gap_pct if min_gap_pct is not None else GAP_UP_LONG_YIN_MIN_GAP_PCT
+    min_body_range_ratio = (
+        min_body_range_ratio if min_body_range_ratio is not None else GAP_UP_LONG_YIN_BODY_RANGE_MIN
+    )
+    min_walk_down_ratio = (
+        min_walk_down_ratio if min_walk_down_ratio is not None else GAP_UP_LONG_YIN_WALK_DOWN_MIN
+    )
+    prev_close = float(close[idx - 1])
+    o, c, h, l = float(open_[idx]), float(close[idx]), float(high[idx]), float(low[idx])
+    if prev_close <= 0 or not all(np.isfinite(x) for x in (o, c, h, l, prev_close)):
+        return False
+    if o <= prev_close * (1.0 + float(min_gap_pct)):
+        return False
+    if c >= o:
+        return False
+    rng = h - l
+    if rng <= 1e-9:
+        return False
+    body = o - c
+    if body / rng < float(min_body_range_ratio):
+        return False
+    open_to_low = o - l
+    if open_to_low <= 1e-9:
+        return False
+    if body / open_to_low < float(min_walk_down_ratio):
+        return False
+    return True
+
+
 @_register_mandatory_sell('高位放量阴线看跌')
 def mandatory_sell_high_heavy_bearish_pattern(df, idx):
     """
@@ -361,6 +411,14 @@ def mandatory_sell_high_heavy_bearish_pattern(df, idx):
     if not _near_high_pressure_zone_at_idx(df, idx):
         return False
     return _heavy_volume_yin_bar(df, idx)
+
+
+@_register_mandatory_sell('高开低走长阴压区必卖')
+def mandatory_sell_gap_up_long_yin_at_pressure(df, idx):
+    """V4：历史压力带内高开低走长阴 → 必卖（不要求相对前一日放量）。"""
+    if not _near_high_pressure_zone_at_idx(df, idx):
+        return False
+    return _gap_up_long_yin_bar(df, idx)
 
 
 @_register_mandatory_sell('一字涨停次日放量阴')
@@ -1282,18 +1340,17 @@ def buy_golden_pit(df, idx):
 @_register_buy('N字形突破')
 def buy_n_shape_breakout(df, idx):
     """
-    W/V 右侧瓶口背景下的 N 字回踩突破（不可脱离 W底右侧 / V反右侧 单独成立）。
-    前高取右侧 entry 至信号日的最高价 high；实现见 strategy_vw_bottle_backtest。
+    V4：仅 V反右侧瓶口 N 字 — 触瓶口 → 回踩 → 突破瓶口（high > neck）。
     """
     if idx < 40:
         return False
-    from strategy_vw_bottle_backtest import n_shape_vw_bottle_buy_signal
+    from v4_aggressive.strategy_vw import n_shape_v_bottle_buy_signal
     close = df['close'].values.astype(float)
     high = df['high'].values.astype(float) if 'high' in df.columns else close
     low = df['low'].values.astype(float) if 'low' in df.columns else close
     vol = df['volume'].values.astype(float) if 'volume' in df.columns else None
     open_ = df['open'].values.astype(float) if 'open' in df.columns else close
-    return n_shape_vw_bottle_buy_signal(close, high, low, vol, idx, open_=open_)
+    return n_shape_v_bottle_buy_signal(close, high, low, vol, idx, open_=open_)
 
 
 @_register_mandatory_sell('旗形跌破')
@@ -2078,7 +2135,25 @@ BREAK_PRIOR_HIGH_BUY_RULE_NAMES = frozenset({
     'N字形突破',
     '旗形突破',
 })
-MIN_UPSIDE_TO_NEXT_PRIOR_HIGH_PCT = 0.03
+MIN_UPSIDE_TO_HISTORICAL_PRIOR_HIGH_PCT = 0.03
+MIN_UPSIDE_TO_NEXT_PRIOR_HIGH_PCT = MIN_UPSIDE_TO_HISTORICAL_PRIOR_HIGH_PCT  # 兼容旧名
+
+
+def get_prior_high_required_buy_rule_names():
+    """V4：须校验历史前高的买入 = V底类 + 整理/突破类；其余加权买入放开。"""
+    from v4_aggressive import v4_v_rev_rules as v4r
+    return (
+        frozenset(BREAK_PRIOR_HIGH_BUY_RULE_NAMES)
+        | frozenset(v4r.V4_V_REV_BUY_RULE_NAMES)
+        | frozenset({'V反底部'})
+    )
+
+
+def buy_rules_require_prior_high_check(buy_triggered=None, mandatory_buy_triggered=None):
+    names = set(buy_triggered or []) | set(mandatory_buy_triggered or [])
+    if not names:
+        return False
+    return bool(names & get_prior_high_required_buy_rule_names())
 NEXT_PRIOR_HIGH_LOOKFORWARD_BARS = 120
 PRIOR_HIGH_LOOKBACK_BARS = 120
 NEXT_PRIOR_HIGH_PIVOT_WINDOW = 5
@@ -2150,13 +2225,21 @@ def _pct_return_vs_ref(anchor_close, ref_price):
 
 
 def _is_breakthrough_prior_high_buy(buy_triggered):
-    """B 是否由突破前高类规则触发（此类标注仍用旧前高扫描）。"""
+    """B 是否由突破前高类规则触发（历史前高扫描用局部峰路径）。"""
     if not buy_triggered:
         return False
     for name in buy_triggered:
         if name in BREAK_PRIOR_HIGH_BUY_RULE_NAMES:
             return True
     return False
+
+
+def bar_body_top_at(open_, close, bar_idx):
+    """K 线实体最上沿：阳线取收盘价，阴线取开盘价。"""
+    bar_idx = int(bar_idx)
+    o = float(open_[bar_idx])
+    c = float(close[bar_idx])
+    return c if c > o else o
 
 
 def _t_high_preceding_bars_ok(high, t_idx, preceding_bars=None):
@@ -2170,8 +2253,13 @@ def _t_high_preceding_bars_ok(high, t_idx, preceding_bars=None):
     return prev_max < t_h - 1e-9
 
 
-def find_prior_high_before_signal_bar(high, signal_idx, lookback=None, pivot_window=None):
-    """信号日之前最近一处前高（局部 high 峰）；若无局部峰则取回看窗内最高 high。"""
+def find_prior_high_before_signal_bar(
+    high, signal_idx, lookback=None, pivot_window=None, min_high_exclusive=None,
+):
+    """
+    信号日之前最近一处前高（局部 high 峰）；若无合格局部峰则在回看窗内取最高 high。
+    min_high_exclusive：前高当日最高价须严格大于该值（V4 为买入/锚定日最高价）。
+    """
     lookback = lookback if lookback is not None else PRIOR_HIGH_LOOKBACK_BARS
     pivot_window = pivot_window if pivot_window is not None else NEXT_PRIOR_HIGH_PIVOT_WINDOW
     signal_idx = int(signal_idx)
@@ -2179,11 +2267,25 @@ def find_prior_high_before_signal_bar(high, signal_idx, lookback=None, pivot_win
     start = max(0, end - lookback)
     if end <= start:
         return None, None
+    min_h = float(min_high_exclusive) if min_high_exclusive is not None else None
+
+    def _qualifies_bar(i):
+        hp = float(high[i])
+        return min_h is None or hp > min_h + 1e-9
+
     for i in range(end - 1, start + pivot_window - 1, -1):
-        if _is_local_high_bar(high, i, pivot_window):
+        if _is_local_high_bar(high, i, pivot_window) and _qualifies_bar(i):
             return i, float(high[i])
-    bi = int(np.argmax(high[start:end]))
-    return start + bi, float(high[start + bi])
+    best_i, best_h = None, None
+    for i in range(start, end):
+        if not _qualifies_bar(i):
+            continue
+        hp = float(high[i])
+        if best_h is None or hp > best_h:
+            best_i, best_h = i, hp
+    if best_i is not None:
+        return best_i, best_h
+    return None, None
 
 
 def find_qualified_t_high_before(
@@ -2191,7 +2293,7 @@ def find_qualified_t_high_before(
 ):
     """
     非突破前高类 B 的历史前高（T高）：
-    1) 当日最高价 > min_high_exclusive（B 信号日最高价）；
+    1) T高当日最高价 > min_high_exclusive（买入/锚定日最高价）；
     2) T高前 preceding_bars 个交易日，各日最高价的最大值 < T高当日最高价。
     自 before_idx 之前由近及远扫描，先局部峰再任意棒。
     """
@@ -2236,10 +2338,46 @@ def find_prior_low_before_signal_bar(low, signal_idx, lookback=None, pivot_windo
     return start + bi, float(low[start + bi])
 
 
-def find_next_prior_high_bar(high, signal_idx, lookforward=None, pivot_window=None):
+def find_historical_prior_high_for_buy(
+    df, buy_bar_idx, buy_triggered=None, lookback=None, pivot_window=None,
+):
+    """
+    V4 历史前高：仅 buy_bar_idx 之前；前高棒 high > 买入日最高价。
+    返回 (idx, high_wick, body_top)。
+    """
+    buy_bar_idx = int(buy_bar_idx)
+    high = df['high'].values.astype(float) if 'high' in df.columns else df['close'].values.astype(float)
+    close = df['close'].values.astype(float)
+    open_ = df['open'].values.astype(float) if 'open' in df.columns else close
+    buy_high = float(high[buy_bar_idx])
+    if buy_high <= 0 or not np.isfinite(buy_high):
+        return None, None, None
+    bt = list(buy_triggered or [])
+    if _is_breakthrough_prior_high_buy(bt):
+        prior_i, prior_h = find_prior_high_before_signal_bar(
+            high, buy_bar_idx, lookback, pivot_window, min_high_exclusive=buy_high,
+        )
+    else:
+        prior_i, prior_h = find_qualified_t_high_before(
+            high, buy_bar_idx, buy_high, lookback, pivot_window,
+        )
+        if prior_i is None:
+            prior_i, prior_h = find_prior_high_before_signal_bar(
+                high, buy_bar_idx, lookback, pivot_window, min_high_exclusive=buy_high,
+            )
+    if prior_i is None:
+        return None, None, None
+    prior_body_top = bar_body_top_at(open_, close, int(prior_i))
+    return int(prior_i), float(prior_h), float(prior_body_top)
+
+
+def find_next_prior_high_bar(
+    high, signal_idx, lookforward=None, pivot_window=None, min_high_exclusive=None,
+):
     """
     信号日之后遇到的下一处前高（局部 high 峰，含上影线）。
-    若无局部峰，则用信号日后窗口内最高 high（须高于信号日 high）。
+    若无局部峰，则用信号日后窗口内最高 high。
+    前高最高价须严格大于 min_high_exclusive（默认=信号日 high；V4 过滤/标注传买入日 high）。
     返回 (bar_index, high_price)。
     """
     lookforward = lookforward if lookforward is not None else NEXT_PRIOR_HIGH_LOOKFORWARD_BARS
@@ -2250,7 +2388,7 @@ def find_next_prior_high_bar(high, signal_idx, lookforward=None, pivot_window=No
     end = min(n, signal_idx + lookforward + 1)
     if start >= n:
         return None, None
-    signal_h = float(high[signal_idx])
+    signal_h = float(min_high_exclusive) if min_high_exclusive is not None else float(high[signal_idx])
     for i in range(start, end):
         if not _is_local_high_bar(high, i, pivot_window):
             continue
@@ -2265,17 +2403,34 @@ def find_next_prior_high_bar(high, signal_idx, lookforward=None, pivot_window=No
     return None, None
 
 
-def find_next_prior_high_price(high, signal_idx, lookforward=None, pivot_window=None):
-    _, price = find_next_prior_high_bar(high, signal_idx, lookforward, pivot_window)
+def find_next_prior_high_price(
+    high, signal_idx, lookforward=None, pivot_window=None, min_high_exclusive=None,
+):
+    _, price = find_next_prior_high_bar(
+        high, signal_idx, lookforward, pivot_window, min_high_exclusive=min_high_exclusive,
+    )
     return price
+
+
+def find_next_prior_high_close(
+    df, signal_idx, lookforward=None, pivot_window=None, min_high_exclusive=None,
+):
+    """下一前高 K 线的收盘价（用于买入日 high → 下一前高收盘 的空间计算）。"""
+    high = df['high'].values.astype(float) if 'high' in df.columns else df['close'].values.astype(float)
+    close = df['close'].values.astype(float)
+    ni, _ = find_next_prior_high_bar(
+        high, signal_idx, lookforward, pivot_window, min_high_exclusive=min_high_exclusive,
+    )
+    if ni is None:
+        return None
+    return float(close[int(ni)])
 
 
 def signal_extreme_annotation(df, signal_bar_idx, anchor_bar_idx=None, buy_triggered=None):
     """
     B/S 标注：历史前高、前高的前高、历史前低。
-    突破前高类买入：前高仍用局部峰扫描。
-    其他 B：T高规则（>信号日最高价，且 T高前5日最高价均低于 T高当日最高价）。
-    anchor_bar_idx：当前价棒（确认棒收盘）；前高收益 = (前高价-现价)/现价。
+    V4 前高（V底/整理突破）：仅买入日前历史 K 线；前高 high > 买入日最高价；
+    空间/标注价用实体最上沿（阳=收盘，阴=开盘）。
     """
     signal_bar_idx = int(signal_bar_idx)
     if signal_bar_idx < 0 or signal_bar_idx >= len(df):
@@ -2286,33 +2441,52 @@ def signal_extreme_annotation(df, signal_bar_idx, anchor_bar_idx=None, buy_trigg
     high = df['high'].values.astype(float) if 'high' in df.columns else df['close'].values.astype(float)
     low = df['low'].values.astype(float) if 'low' in df.columns else df['close'].values.astype(float)
     close = df['close'].values.astype(float)
-    anchor_close = float(close[anchor_bar_idx])
+    open_ = df['open'].values.astype(float) if 'open' in df.columns else close
+    buy_day_high = float(high[anchor_bar_idx])
+    buy_body_top = bar_body_top_at(open_, close, anchor_bar_idx)
     signal_h = float(high[signal_bar_idx])
-    out = {'signal_bar_high': round(signal_h, 2)}
+    out = {
+        'signal_bar_high': round(signal_h, 2),
+        'buy_bar_high': round(buy_day_high, 2),
+        'buy_bar_body_top': round(buy_body_top, 2),
+    }
+
+    if not buy_rules_require_prior_high_check(buy_triggered=buy_triggered):
+        low_i, low_p = find_prior_low_before_signal_bar(low, signal_bar_idx)
+        if low_i is not None:
+            out['prior_low_date'] = bar_date_str_from_df(df, low_i)
+            out['prior_low_price'] = round(float(low_p), 2)
+            ret_l = _pct_return_vs_ref(float(close[anchor_bar_idx]), low_p)
+            if ret_l is not None:
+                out['return_vs_prior_low_pct'] = ret_l
+        return out
 
     use_t_high = not _is_breakthrough_prior_high_buy(buy_triggered)
     out['prior_high_mode'] = 't_high' if use_t_high else 'breakthrough'
 
-    if use_t_high:
-        prior_i, prior_p = find_qualified_t_high_before(high, signal_bar_idx, signal_h)
-    else:
-        prior_i, prior_p = find_prior_high_before_signal_bar(high, signal_bar_idx)
+    prior_i, _prior_h, prior_body_top = find_historical_prior_high_for_buy(
+        df, anchor_bar_idx, buy_triggered=buy_triggered,
+    )
     if prior_i is not None:
         out['prior_high_date'] = bar_date_str_from_df(df, prior_i)
-        out['prior_high_price'] = round(float(prior_p), 2)
-        ret = _pct_upside_ref_minus_current(anchor_close, prior_p)
+        out['prior_high_price'] = round(prior_body_top, 2)
+        out['prior_high_wick'] = round(float(_prior_h), 2)
+        ret = _pct_upside_ref_minus_current(buy_body_top, prior_body_top)
         if ret is not None:
             out['return_vs_prior_high_pct'] = ret
 
     if prior_i is not None:
         if use_t_high:
-            pp_i, pp_p = find_qualified_t_high_before(high, prior_i, signal_h)
+            pp_i, _pp_h = find_qualified_t_high_before(high, prior_i, buy_day_high)
         else:
-            pp_i, pp_p = find_prior_high_before_signal_bar(high, prior_i)
+            pp_i, _pp_h = find_prior_high_before_signal_bar(
+                high, prior_i, min_high_exclusive=buy_day_high,
+            )
         if pp_i is not None:
+            pp_body_top = bar_body_top_at(open_, close, int(pp_i))
             out['prior_prior_high_date'] = bar_date_str_from_df(df, pp_i)
-            out['prior_prior_high_price'] = round(float(pp_p), 2)
-            ret_pp = _pct_upside_ref_minus_current(anchor_close, pp_p)
+            out['prior_prior_high_price'] = round(pp_body_top, 2)
+            ret_pp = _pct_upside_ref_minus_current(buy_body_top, pp_body_top)
             if ret_pp is not None:
                 out['return_vs_prior_prior_high_pct'] = ret_pp
 
@@ -2320,7 +2494,7 @@ def signal_extreme_annotation(df, signal_bar_idx, anchor_bar_idx=None, buy_trigg
     if low_i is not None:
         out['prior_low_date'] = bar_date_str_from_df(df, low_i)
         out['prior_low_price'] = round(float(low_p), 2)
-        ret_l = _pct_return_vs_ref(anchor_close, low_p)
+        ret_l = _pct_return_vs_ref(float(close[anchor_bar_idx]), low_p)
         if ret_l is not None:
             out['return_vs_prior_low_pct'] = ret_l
 
@@ -2328,37 +2502,73 @@ def signal_extreme_annotation(df, signal_bar_idx, anchor_bar_idx=None, buy_trigg
 
 
 def prior_next_high_annotation(df, signal_bar_idx, anchor_bar_idx=None, buy_triggered=None):
-    """兼容旧名；买入过滤仍用 find_next_prior_high_*，此处仅输出历史高低点标注。"""
+    """兼容旧名；前高仅历史回看 + 实体上沿。"""
     return signal_extreme_annotation(df, signal_bar_idx, anchor_bar_idx, buy_triggered)
 
 
-def breakthrough_has_room_to_next_prior_high(df, signal_idx, min_upside_pct=None):
-    """信号日最高价 → 下一前高的涨幅须 >= min_upside_pct（默认 3 个点=3%）。"""
+def buy_has_room_to_historical_prior_high(
+    df, buy_bar_idx, buy_triggered=None, mandatory_buy_triggered=None, min_upside_pct=None,
+):
+    """买入日实体上沿 → 历史前高实体上沿 >= min_upside_pct；仅 V底/整理突破类触发时生效。"""
+    if not buy_rules_require_prior_high_check(buy_triggered, mandatory_buy_triggered):
+        return True
     if min_upside_pct is None:
-        min_upside_pct = MIN_UPSIDE_TO_NEXT_PRIOR_HIGH_PCT
-    signal_idx = int(signal_idx)
-    if signal_idx < 0 or signal_idx >= len(df):
+        min_upside_pct = MIN_UPSIDE_TO_HISTORICAL_PRIOR_HIGH_PCT
+    buy_bar_idx = int(buy_bar_idx)
+    if buy_bar_idx < 0 or buy_bar_idx >= len(df):
         return True
-    high = df['high'].values.astype(float) if 'high' in df.columns else df['close'].values.astype(float)
-    signal_h = float(high[signal_idx])
-    if signal_h <= 0 or not np.isfinite(signal_h):
+    close = df['close'].values.astype(float)
+    open_ = df['open'].values.astype(float) if 'open' in df.columns else close
+    buy_body_top = bar_body_top_at(open_, close, buy_bar_idx)
+    if buy_body_top <= 0 or not np.isfinite(buy_body_top):
         return True
-    next_h = find_next_prior_high_price(high, signal_idx)
-    if next_h is None:
+    combined = list(buy_triggered or []) + list(mandatory_buy_triggered or [])
+    _pi, _ph, prior_body_top = find_historical_prior_high_for_buy(
+        df, buy_bar_idx, buy_triggered=combined,
+    )
+    if prior_body_top is None:
         return True
-    upside = (next_h - signal_h) / signal_h
+    upside = (float(prior_body_top) - buy_body_top) / buy_body_top
     return upside >= float(min_upside_pct) - 1e-12
 
 
-def breakthrough_prior_high_vetoes_buy(df, signal_idx):
-    """空间不足时返回 True（应放弃 B）。"""
-    return not breakthrough_has_room_to_next_prior_high(df, signal_idx)
+def buy_prior_high_vetoes_buy(
+    df, buy_bar_idx, buy_triggered=None, mandatory_buy_triggered=None,
+):
+    return not buy_has_room_to_historical_prior_high(
+        df, buy_bar_idx,
+        buy_triggered=buy_triggered,
+        mandatory_buy_triggered=mandatory_buy_triggered,
+    )
 
 
-def apply_all_buy_next_high_room_filter(
+def breakthrough_has_room_to_next_prior_high(
+    df, buy_bar_idx, buy_triggered=None, mandatory_buy_triggered=None, min_upside_pct=None, **_kw,
+):
+    """兼容旧名：V4 历史前高 + 实体上沿，且仅 V底/整理突破类须校验。"""
+    return buy_has_room_to_historical_prior_high(
+        df, buy_bar_idx,
+        buy_triggered=buy_triggered,
+        mandatory_buy_triggered=mandatory_buy_triggered,
+        min_upside_pct=min_upside_pct,
+    )
+
+
+def breakthrough_prior_high_vetoes_buy(
+    df, signal_idx, buy_triggered=None, mandatory_buy_triggered=None, **_kw,
+):
+    return buy_prior_high_vetoes_buy(
+        df, signal_idx,
+        buy_triggered=buy_triggered,
+        mandatory_buy_triggered=mandatory_buy_triggered,
+    )
+
+
+def apply_all_buy_prior_high_room_filter(
     df, buy_signals_pre, buy_rules_map, start_offset, mandatory_buy_pre=None,
 ):
-    """全部买入（含必买）：信号日 high 至下一前高空间 < 3% 则置 False。"""
+    """V底/整理突破：买入日距历史前高（实体上沿）过近则置 False；其余买入规则不滤。"""
+    required = get_prior_high_required_buy_rule_names()
     n = len(df)
     pools = []
     if buy_signals_pre is not None:
@@ -2367,15 +2577,17 @@ def apply_all_buy_next_high_room_filter(
         pools.append(mandatory_buy_pre)
     for pool in pools:
         for name, arr in pool.items():
-            if arr is None:
+            if arr is None or name not in required:
                 continue
             for idx in range(start_offset, n):
-                if arr[idx] and breakthrough_prior_high_vetoes_buy(df, idx):
+                if arr[idx] and buy_prior_high_vetoes_buy(
+                    df, idx, buy_triggered=[name],
+                ):
                     arr[idx] = False
 
 
-# 兼容旧名
-apply_breakthrough_next_high_room_filter = apply_all_buy_next_high_room_filter
+apply_all_buy_next_high_room_filter = apply_all_buy_prior_high_room_filter
+apply_breakthrough_next_high_room_filter = apply_all_buy_prior_high_room_filter
 
 
 def _idx_has_pattern_breakout_buy_support(buy_signals_pre, mandatory_buy_pre, idx, exclude_names=None):
@@ -2780,7 +2992,7 @@ def generate_signals_with_weights(df, buy_rules, buy_weights,
         if candidate == 'B' and upper_shadow_vetoes_buy_signal(df, idx):
             candidate = None
 
-        if candidate == 'B' and breakthrough_prior_high_vetoes_buy(df, idx):
+        if candidate == 'B' and buy_prior_high_vetoes_buy(df, idx, buy_triggered=triggered_buy):
             candidate = None
 
         reasons = {

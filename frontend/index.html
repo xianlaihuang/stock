@@ -308,19 +308,13 @@
             <div id="poolReturnLogPage" class="pool-log-page card">
                 <div class="card-title">股票池 · 总收益日志</div>
                 <p style="color:#888;font-size:13px;margin-bottom:12px;line-height:1.6;">
-                    汇总股票池<strong>历次「公式计算 + 运行分析」</strong>记录。Δ列为<strong>最近一次相对上一执行</strong>的收益变化，用于对比买卖规则/权重调整后的效果（模拟资金 100 万复利）。
+                    上表汇总各股<strong>运行分析</strong>的收益与 Δ（最近一次相对上一执行，模拟 100 万复利）。可单独或组合执行：<strong>公式计算</strong>（迭代买卖权重）、<strong>运行分析</strong>（V2/V3/V4 信号与收益）、或二者连续执行。仅公式时上表收益不变，需再跑分析后刷新。
                 </p>
                 <div class="run-log-toolbar">
                     <button type="button" class="btn btn-primary" style="font-size:12px;padding:6px 12px;" onclick="loadPoolReturnLog()">刷新</button>
-                    <button type="button" class="btn btn-success" id="poolBatchRunBtn" style="font-size:12px;padding:6px 12px;" onclick="poolBatchRun()">批量公式+分析</button>
-                    <label class="run-log-filter-label">
-                        <input type="checkbox" id="poolRunWeights" checked>
-                        公式计算
-                    </label>
-                    <label class="run-log-filter-label">
-                        <input type="checkbox" id="poolRunAnalyze" checked>
-                        运行分析
-                    </label>
+                    <button type="button" class="btn pool-batch-btn" style="font-size:12px;padding:6px 12px;" onclick="poolBatchRun({run_weights:true,run_analyze:false})">批量公式计算</button>
+                    <button type="button" class="btn btn-success pool-batch-btn" style="font-size:12px;padding:6px 12px;" onclick="poolBatchRun({run_weights:false,run_analyze:true})">批量运行分析</button>
+                    <button type="button" class="btn btn-success pool-batch-btn" style="font-size:12px;padding:6px 12px;" onclick="poolBatchRun({run_weights:true,run_analyze:true})">批量公式+分析</button>
                     <span class="run-log-filter-label" style="cursor:default;">历次记录：每只股票固定最近 10 条（时间倒序）</span>
                     <span class="pool-log-sort-hint">汇总表可点 V2/V3/V4 排序</span>
                 </div>
@@ -2446,7 +2440,7 @@
                     const priorLowCell = tableExtremeCell('prior_low_date', 'prior_low_price', 'return_vs_prior_low_pct');
                     let rowTitle = '双击定位到下方K线该日期';
                     if (s.prior_high_date || s.prior_prior_high_date || s.prior_low_date) {
-                        rowTitle += '；非突破前高类B：T高>信号日最高价且前5日最高价均低于T高；前高收益=(前高价-现价)/现价';
+                        rowTitle += '；非突破前高类B：T高>信号日最高价且前5日最高价均低于T高；前高空间=(前高收盘-买入日最高)/买入日最高';
                         if (s.signal_date) rowTitle += `；信号日 ${tableNormDate(s.signal_date)}`;
                     }
                     const dataAttr = barKey ? ` data-bar-date="${barKey}"` : '';
@@ -2718,23 +2712,38 @@
                     formatter: function(params) {
                         if (!params || !params[0]) return '';
                         const dateStr = params[0].name;
-                        let r = `<div style="font-weight:bold;margin-bottom:6px;">${dateStr}</div>`;
+                        const line1 = 'white-space:nowrap;margin-bottom:2px;';
+                        let r = `<div style="font-weight:bold;margin-bottom:6px;white-space:nowrap;">${dateStr}</div>`;
+                        const maLines = [];
+                        let volLine = '';
                         params.forEach(p => {
                             if (p.seriesName === 'K线') {
                                 const idx = p.dataIndex;
                                 const k = klines[idx];
                                 if (k) {
                                     const isUp = k.close >= k.open;
-                                    r += `<div>开: ${k.open} 收: <span style="color:${isUp ? '#ef5350' : '#27ae60'}">${k.close}</span> 高: ${k.high} 低: ${k.low}</div>`;
+                                    r += `<div style="${line1}">开: ${k.open}  收: <span style="color:${isUp ? '#ef5350' : '#27ae60'}">${k.close}</span>  高: ${k.high}  低: ${k.low}</div>`;
                                 }
                             } else if (p.seriesName === '成交量') {
-                                r += `<div>量: ${p.data.toLocaleString()}</div>`;
+                                volLine = `量: ${Number(p.data).toLocaleString()}`;
                             } else if (p.seriesName === 'MA5' || p.seriesName === 'MA10' || p.seriesName === 'MA20') {
-                                if (p.data !== '-') {
-                                    r += `<div style="color:${p.color};">${p.seriesName}: ${p.data}</div>`;
+                                if (p.data !== '-' && p.data != null && p.data !== '') {
+                                    maLines.push({ name: p.seriesName, color: p.color, val: p.data });
                                 }
                             }
                         });
+                        if (maLines.length) {
+                            const maOrder = ['MA5', 'MA10', 'MA20'];
+                            const maHtml = maOrder
+                                .map(n => maLines.find(m => m.name === n))
+                                .filter(Boolean)
+                                .map(m => `<span style="color:${m.color};">${m.name}: ${m.val}</span>`)
+                                .join('&nbsp;&nbsp;');
+                            r += `<div style="${line1}">${maHtml}</div>`;
+                        }
+                        if (volLine) {
+                            r += `<div style="${line1}">${volLine}</div>`;
+                        }
                         const sig = allSigMap[dateStr];
                         if (sig) {
                             const isB = sig.type === 'B';
@@ -2746,12 +2755,18 @@
                             if (sig.sell_reason_type) {
                                 r += `<div style="color:#ff6b6b;font-size:11px;font-weight:600;">⚡ ${sig.sell_reason_type}</div>`;
                             }
-                            if (sig.confidence) {
-                                r += `<div style="color:#aaa;font-size:11px;">置信度: ${(sig.confidence*100).toFixed(0)}%</div>`;
-                            }
-                            if (sig.return_rate_pct !== null && sig.return_rate_pct !== undefined) {
-                                const retColor = sig.return_rate_pct >= 0 ? '#ef5350' : '#27ae60';
-                                r += `<div style="color:${retColor};">收益率: ${sig.return_rate_pct > 0 ? '+' : ''}${sig.return_rate_pct}%</div>`;
+                            {
+                                const meta = [];
+                                if (sig.confidence) {
+                                    meta.push(`<span style="color:#aaa;">置信度: ${(sig.confidence * 100).toFixed(0)}%</span>`);
+                                }
+                                if (sig.return_rate_pct !== null && sig.return_rate_pct !== undefined) {
+                                    const retColor = sig.return_rate_pct >= 0 ? '#ef5350' : '#27ae60';
+                                    meta.push(`<span style="color:${retColor};">收益率: ${sig.return_rate_pct > 0 ? '+' : ''}${sig.return_rate_pct}%</span>`);
+                                }
+                                if (meta.length) {
+                                    r += `<div style="${line1}font-size:11px;">${meta.join('&nbsp;&nbsp;')}</div>`;
+                                }
                             }
                             if (sig.mandatory_sell_triggered && sig.mandatory_sell_triggered.length > 0) {
                                 sig.mandatory_sell_triggered.forEach(rule => {
@@ -2774,7 +2789,7 @@
                                 let ret = '';
                                 const rv = sig[retKey];
                                 if (rv != null) {
-                                    ret = ` · 收益 ${rv > 0 ? '+' : ''}${rv}%`;
+                                    ret = ` · 空间 ${rv > 0 ? '+' : ''}${rv}%`;
                                 }
                                 r += `<div style="color:${color};font-size:11px;">${label}: ${dt}${px}${ret}</div>`;
                             }
@@ -3192,7 +3207,9 @@
                     html += `<td>${lat ? formatRunLogDuration(lat.duration_ms) : '-'}</td>`;
                 }
                 html += `<td class="pool-actions" onclick="event.stopPropagation()">`;
-                html += `<button type="button" class="btn btn-success" onclick="poolRunOne('${code}')">公式+分析</button>`;
+                html += `<button type="button" class="btn" onclick="poolRunOne('${code}',{run_weights:true,run_analyze:false})">公式</button>`;
+                html += `<button type="button" class="btn btn-success" onclick="poolRunOne('${code}',{run_weights:false,run_analyze:true})">分析</button>`;
+                html += `<button type="button" class="btn btn-success" onclick="poolRunOne('${code}',{run_weights:true,run_analyze:true})">全</button>`;
                 html += `<button type="button" class="btn btn-primary" onclick="openStockRunLog('${code}', '${String(name).replace(/'/g, "\\'")}')">日志</button>`;
                 html += '</td></tr>';
             });
@@ -3226,29 +3243,51 @@
             }
         }
 
-        function poolRunPayload(codes) {
-            const rw = document.getElementById('poolRunWeights');
-            const ra = document.getElementById('poolRunAnalyze');
+        function poolRunModeLabel(opts) {
+            opts = opts || {};
+            const w = opts.run_weights !== false;
+            const a = opts.run_analyze !== false;
+            if (w && a) return '公式+分析';
+            if (w) return '公式计算';
+            if (a) return '运行分析';
+            return '执行';
+        }
+
+        function poolRunPayload(codes, opts) {
+            opts = opts || {};
+            let run_weights = opts.run_weights;
+            let run_analyze = opts.run_analyze;
+            if (run_weights === undefined) run_weights = true;
+            if (run_analyze === undefined) run_analyze = true;
             return {
                 stock_codes: codes && codes.length ? codes : undefined,
-                run_weights: !!(rw && rw.checked),
-                run_analyze: !!(ra && ra.checked),
+                run_weights: !!run_weights,
+                run_analyze: !!run_analyze,
+                max_workers: 8,
                 trigger: codes && codes.length === 1 ? 'pool_single' : 'pool_batch',
             };
         }
 
-        async function poolRunOne(code) {
+        function setPoolBatchButtonsBusy(busy) {
+            document.querySelectorAll('.pool-batch-btn').forEach(btn => {
+                btn.disabled = !!busy;
+            });
+        }
+
+        async function poolRunOne(code, opts) {
             if (!code) return;
-            showToast(`${code} 公式+分析中…`, 'info');
+            opts = opts || {};
+            const label = poolRunModeLabel(opts);
+            showToast(`${code} ${label}中…`, 'info');
             try {
                 const res = await fetch(`${API_BASE}/v2/pool/run`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(poolRunPayload([code])),
+                    body: JSON.stringify(poolRunPayload([code], opts)),
                 });
                 const data = await res.json();
                 if (data.success && data.results && data.results[0] && data.results[0].success) {
-                    showToast(`${code} 完成`, 'success');
+                    showToast(`${code} ${label}完成`, 'success');
                     loadPoolReturnLog();
                 } else {
                     const msg = (data.results && data.results[0] && data.results[0].message) || data.message || '失败';
@@ -3259,32 +3298,40 @@
             }
         }
 
-        async function poolBatchRun() {
-            const btn = document.getElementById('poolBatchRunBtn');
-            const rw = document.getElementById('poolRunWeights');
-            const ra = document.getElementById('poolRunAnalyze');
+        async function poolBatchRun(opts) {
+            opts = opts || {};
+            const payload = poolRunPayload(undefined, opts);
             if (!poolLogRows.length) {
                 showToast('股票池为空', 'error');
                 return;
             }
-            if (!(rw && rw.checked) && !(ra && ra.checked)) {
-                showToast('请至少勾选公式计算或运行分析', 'error');
+            if (!payload.run_weights && !payload.run_analyze) {
+                showToast('请选择执行内容', 'error');
                 return;
             }
             const parts = [];
-            if (rw && rw.checked) parts.push('公式计算');
-            if (ra && ra.checked) parts.push('运行分析');
-            if (!confirm(`对股票池 ${poolLogRows.length} 只股票批量执行：${parts.join(' + ')}？\n将顺序执行并写入历次日志。`)) return;
-            if (btn) { btn.disabled = true; btn.textContent = '批量执行中…'; }
+            if (payload.run_weights) parts.push('公式计算');
+            if (payload.run_analyze) parts.push('运行分析');
+            const modeLabel = parts.join(' + ');
+            if (!confirm(`对股票池 ${poolLogRows.length} 只股票批量执行：${modeLabel}？\n将并行处理（8 线程）并写入历次日志，耗时取决于池大小。`)) return;
+            setPoolBatchButtonsBusy(true);
             try {
+                const ctrl = new AbortController();
+                const timer = setTimeout(() => ctrl.abort(), 3600000);
                 const res = await fetch(`${API_BASE}/v2/pool/run`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(poolRunPayload()),
+                    body: JSON.stringify(payload),
+                    signal: ctrl.signal,
                 });
+                clearTimeout(timer);
                 const data = await res.json();
                 if (data.success) {
-                    showToast(data.message || '批量完成', 'success');
+                    const s = data.summary || {};
+                    const extra = s.batch_duration_ms != null
+                        ? `，总耗时 ${(s.batch_duration_ms / 1000).toFixed(1)}s${s.parallel ? `（并行×${s.max_workers || 8}）` : '（顺序）'}`
+                        : '';
+                    showToast((data.message || `批量${modeLabel}完成`) + extra, 'success');
                     loadPoolReturnLog();
                 } else {
                     showToast(data.message || '批量失败', 'error');
@@ -3292,7 +3339,7 @@
             } catch (e) {
                 showToast('网络错误', 'error');
             } finally {
-                if (btn) { btn.disabled = false; btn.textContent = '批量公式+分析'; }
+                setPoolBatchButtonsBusy(false);
             }
         }
 

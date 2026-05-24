@@ -16,6 +16,20 @@ def _stock_name(code):
         return ''
 
 
+def stock_names_map(codes):
+    """一次查询股票名称，供批量任务复用。"""
+    codes = list({str(c).strip() for c in (codes or []) if str(c).strip()})
+    if not codes:
+        return {}
+    try:
+        cursor = stock_collection.find(
+            {'code': {'$in': codes}}, {'code': 1, 'name': 1, '_id': 0},
+        )
+        return {d['code']: (d.get('name') or '') for d in cursor}
+    except Exception:
+        return {}
+
+
 def _portfolio_snapshot(port):
     if not port:
         return {}
@@ -43,10 +57,11 @@ def save_run_log(
     weights_opt=None,
     start_date=None,
     end_date=None,
+    stock_name=None,
 ):
     doc = {
         'stock_code': stock_code,
-        'stock_name': _stock_name(stock_code),
+        'stock_name': stock_name if stock_name is not None else _stock_name(stock_code),
         'run_type': run_type,
         'trigger': trigger,
         'success': bool(success),

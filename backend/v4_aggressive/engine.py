@@ -193,19 +193,34 @@ def _klines_to_df(klines):
     return df
 
 
-def _precompute_rule_signals(df, rules, start_offset=60):
-    n = len(df)
-    signals = {}
-    for name, func in rules.items():
-        arr = np.zeros(n, dtype=np.bool_)
-        for idx in range(start_offset, n):
-            try:
-                if func(df, idx):
-                    arr[idx] = True
-            except Exception:
-                pass
-        signals[name] = arr
-    return signals
+def _precompute_rule_signals(df, rules, start_offset=60, max_workers=None):
+    import engine_v2 as ev2
+    return ev2._precompute_rule_signals(df, rules, start_offset, max_workers=max_workers)
+
+
+def patch_v4_precomputed_signals(
+    df, precomputed, start_offset, sell_rules, mandatory_sell_rules,
+    structure_mode='curve', bearish_candle_mode='slim',
+):
+    """在共享预计算结果上叠加 V4 专用卖规则序列。"""
+    import engine_v2 as ev2
+    from v4_aggressive.bearish_candle_modes import precompute_bearish_pattern_series
+
+    out = ev2._clone_precomputed_signals(precomputed)
+    if '看跌K线形态' in sell_rules:
+        out.setdefault('sell', {})['看跌K线形态'] = precompute_bearish_pattern_series(
+            df, start_offset, mode=bearish_candle_mode,
+        )
+    if structure_mode == 'legacy':
+        if 'M顶跌破' in mandatory_sell_rules:
+            out.setdefault('mandatory_sell', {})['M顶跌破'] = _legacy_mandatory_sell_series(
+                df, 'M顶跌破', start_offset,
+            )
+        if 'V反顶部' in mandatory_sell_rules:
+            out.setdefault('mandatory_sell', {})['V反顶部'] = _legacy_mandatory_sell_series(
+                df, 'V反顶部', start_offset,
+            )
+    return out
 
 
 def _preprocess_data(df):
@@ -447,19 +462,16 @@ def _legacy_mandatory_sell_series(df, rule_name, start_offset):
 
 
 def _mandatory_buy_rules_v4(df, start_offset, structure_mode='curve'):
-    """V4 激进必买：W底右侧 + 四类 V 反（与 V3 的 strategy 模块隔离）。"""
+    """V4 激进必买：V反右侧 + 激进底三条 + V4V反吞没（不含 W 结构）。"""
     import talib
-    from v4_aggressive.strategy_vw import detect_w_right_bottom_events
     from v4_aggressive import v4_v_rev_rules as v4r
 
     close = df['close'].values.astype(float)
     open_ = df['open'].values.astype(float) if 'open' in df.columns else close.copy()
     high = df['high'].values.astype(float) if 'high' in df.columns else close
     low = df['low'].values.astype(float) if 'low' in df.columns else close
-    vol = df['volume'].values.astype(float) if 'volume' in df.columns else None
     n = len(close)
 
-    w_flags = np.zeros(n, dtype=bool)
     v_right_flags = np.zeros(n, dtype=bool)
     v4_aggr_needle_flags = np.zeros(n, dtype=bool)
     v4_aggr_stabilize_flags = np.zeros(n, dtype=bool)
@@ -467,24 +479,12 @@ def _mandatory_buy_rules_v4(df, start_offset, structure_mode='curve'):
     v4_engulf_flags = np.zeros(n, dtype=bool)
 
     if structure_mode == 'legacy':
-        from v4_aggressive.strategy_vw import (
-            detect_w_right_bottom_events_legacy,
-            detect_v_right_bottom_events_legacy,
-        )
-        w_events = detect_w_right_bottom_events_legacy(close, high, low, n)
+        from v4_aggressive.strategy_vw import detect_v_right_bottom_events_legacy
         v_events = detect_v_right_bottom_events_legacy(close, high, low, n)
     else:
-        from v4_aggressive.strategy_vw import (
-            detect_w_right_bottom_events,
-            detect_v_right_bottom_events,
-        )
-        w_events = detect_w_right_bottom_events(close, high, low, n, open_=open_)
+        from v4_aggressive.strategy_vw import detect_v_right_bottom_events
         v_events = detect_v_right_bottom_events(close, high, low, n, open_=open_)
 
-    for ev in w_events:
-        e = int(ev['entry'])
-        if start_offset <= e < n:
-            w_flags[e] = True
     for ev in v_events:
         e = int(ev['entry'])
         if start_offset <= e < n:
@@ -508,7 +508,7 @@ def _mandatory_buy_rules_v4(df, start_offset, structure_mode='curve'):
             v4_engulf_flags[s + 1] = True
 
     _, _, _, _, base_mb = dwe.get_all_rules_extended()
-    out = {k: v for k, v in base_mb.items() if k not in ('W底突破', 'V反底部')}
+    out = {k: v for k, v in base_mb.items() if k not in ('W底突破', 'V反底部', 'W底右侧')}
 
     def _mk_flag(arr):
         def _f(df_, idx):
@@ -516,7 +516,6 @@ def _mandatory_buy_rules_v4(df, start_offset, structure_mode='curve'):
             return 0 <= i < len(arr) and bool(arr[i])
         return _f
 
-    out['W底右侧'] = _mk_flag(w_flags)
     out['V反右侧'] = _mk_flag(v_right_flags)
     out[v4r.V4_AGGR_BOTTOM_NEEDLE] = _mk_flag(v4_aggr_needle_flags)
     out[v4r.V4_AGGR_BOTTOM_STABILIZE] = _mk_flag(v4_aggr_stabilize_flags)
@@ -576,6 +575,9 @@ def _mark_bs_points(df, buy_rules, sell_rules, mandatory_buy_rules,
     pending_buy = None
     v4_golden_pit_entry = False
     v4_gp_wait_break_m20 = False
+    v4_v_rev_entry = False
+    v4_ma20_suppress_armed = False
+    v4_ma20_rally_fade_armed = False
     v4_aggr_bottom_exclusive = False
     v4_aggr_ma5_below_streak = 0
     v4_bearish_ma5_defer = False
@@ -583,11 +585,16 @@ def _mark_bs_points(df, buy_rules, sell_rules, mandatory_buy_rules,
     _legacy_bearish = bearish_candle_mode == 'legacy'
 
     def _clear_v4_position_exits():
-        nonlocal v4_golden_pit_entry, v4_gp_wait_break_m20, v4_aggr_bottom_stop
+        nonlocal v4_golden_pit_entry, v4_gp_wait_break_m20, v4_v_rev_entry, v4_ma20_suppress_armed
+        nonlocal v4_ma20_rally_fade_armed
+        nonlocal v4_aggr_bottom_stop
         nonlocal v4_aggr_bottom_exclusive, v4_aggr_ma5_below_streak
         nonlocal v4_bearish_ma5_defer, v4_bearish_ma5_defer_kind
         v4_golden_pit_entry = False
         v4_gp_wait_break_m20 = False
+        v4_v_rev_entry = False
+        v4_ma20_suppress_armed = False
+        v4_ma20_rally_fade_armed = False
         v4_aggr_bottom_stop = None
         v4_aggr_bottom_exclusive = False
         v4_aggr_ma5_below_streak = 0
@@ -595,7 +602,8 @@ def _mark_bs_points(df, buy_rules, sell_rules, mandatory_buy_rules,
         v4_bearish_ma5_defer_kind = None
 
     def _bind_aggr_bottom_on_buy(buy_idx, mbuy, bt=None):
-        nonlocal v4_aggr_bottom_stop, v4_aggr_bottom_exclusive, v4_aggr_ma5_below_streak
+        nonlocal v4_aggr_bottom_stop, v4_aggr_bottom_exclusive, v4_aggr_ma5_below_streak, v4_v_rev_entry
+        nonlocal v4_ma20_suppress_armed, v4_ma20_rally_fade_armed
         if set(mbuy or []) & v4r.V4_AGGRESSIVE_BOTTOM_RULE_NAMES:
             floor = v4_aggr_stop_by_entry.get(int(buy_idx))
             v4_aggr_bottom_stop = float(floor) if floor is not None else None
@@ -603,6 +611,9 @@ def _mark_bs_points(df, buy_rules, sell_rules, mandatory_buy_rules,
             v4_aggr_bottom_stop = None
         v4_aggr_bottom_exclusive = v4r.is_exclusive_aggressive_bottom_entry(mbuy, bt)
         v4_aggr_ma5_below_streak = 0
+        v4_v_rev_entry = v4r.is_v_rev_context_buy(mbuy, bt)
+        v4_ma20_suppress_armed = False
+        v4_ma20_rally_fade_armed = False
 
     for idx in range(start_offset, n):
         if pending_buy is not None:
@@ -824,6 +835,68 @@ def _mark_bs_points(df, buy_rules, sell_rules, mandatory_buy_rules,
                     })
                     continue
 
+        if in_position and v4_v_rev_entry:
+            entry_idx, _ = trade_history[-1]
+            if idx > entry_idx:
+                m5v = ma5[idx]
+                ma5_break = (
+                    not pd.isna(m5v) and float(close[idx]) < float(m5v)
+                )
+                if v4_ma20_rally_fade_armed and ma5_break:
+                    _clear_v4_position_exits()
+                    trade_history.append((idx, 'S'))
+                    signals.append((idx, 'S'))
+                    reasons_list.append({
+                        'buy_triggered': [], 'sell_triggered': [],
+                        'mandatory_buy_triggered': [],
+                        'mandatory_sell_triggered': [v4r.V4_V_REV_MA20_MA5_SELL_REASON],
+                        'buy_restriction_triggered': [],
+                        'buy_score': 0.0, 'sell_score': 0.0, 'final_signal': 'S',
+                        'confidence': 1.0, 'level': 'strong',
+                        'sell_reason_type': v4r.V4_V_REV_MA20_MA5_SELL_REASON,
+                    })
+                    continue
+                if not v4r.is_ma20_clear_downtrend(ma20, idx):
+                    v4_ma20_suppress_armed = False
+                elif v4_ma20_suppress_armed and ma5_break:
+                    _clear_v4_position_exits()
+                    trade_history.append((idx, 'S'))
+                    signals.append((idx, 'S'))
+                    reasons_list.append({
+                        'buy_triggered': [], 'sell_triggered': [],
+                        'mandatory_buy_triggered': [],
+                        'mandatory_sell_triggered': [v4r.V4_V_REV_MA20_MA5_SELL_REASON],
+                        'buy_restriction_triggered': [],
+                        'buy_score': 0.0, 'sell_score': 0.0, 'final_signal': 'S',
+                        'confidence': 1.0, 'level': 'strong',
+                        'sell_reason_type': v4r.V4_V_REV_MA20_MA5_SELL_REASON,
+                    })
+                    continue
+                elif v4r.v_rev_ma20_suppress_immediate_sell(
+                    open_, high, low, close, ma20, idx,
+                ):
+                    _clear_v4_position_exits()
+                    trade_history.append((idx, 'S'))
+                    signals.append((idx, 'S'))
+                    reasons_list.append({
+                        'buy_triggered': [], 'sell_triggered': [],
+                        'mandatory_buy_triggered': [],
+                        'mandatory_sell_triggered': [v4r.V4_V_REV_MA20_SUPPRESS_SELL_REASON],
+                        'buy_restriction_triggered': [],
+                        'buy_score': 0.0, 'sell_score': 0.0, 'final_signal': 'S',
+                        'confidence': 1.0, 'level': 'strong',
+                        'sell_reason_type': v4r.V4_V_REV_MA20_SUPPRESS_SELL_REASON,
+                    })
+                    continue
+                elif v4r.v_rev_ma20_suppress_should_arm_ma5(
+                    open_, high, low, close, ma20, idx,
+                ):
+                    v4_ma20_suppress_armed = True
+                elif v4r.v_rev_ma20_rally_fade_near_ma20_should_arm_ma5(
+                    open_, high, low, close, ma20, idx,
+                ):
+                    v4_ma20_rally_fade_armed = True
+
         if in_position and v4_golden_pit_entry:
             entry_idx, _ = trade_history[-1]
             if idx > entry_idx:
@@ -947,6 +1020,14 @@ def _mark_bs_points(df, buy_rules, sell_rules, mandatory_buy_rules,
             ):
                 candidate = None
 
+        if candidate == 'B' and is_mandatory_buy:
+            from v4_aggressive import v4_v_rev_rules as v4r
+            if v4r.is_v_rev_context_buy(triggered_mandatory_buy, triggered_buy):
+                if idx >= 20 and v4r.v_rev_ma20_blocks_v_buy(
+                    open_, high, low, close, ma20, idx,
+                ):
+                    candidate = None
+
         if candidate is not None:
             if idx < 20 or pd.isna(ma20[idx]) or pd.isna(ma20[idx - 1]):
                 candidate = None
@@ -987,10 +1068,12 @@ def _mark_bs_points(df, buy_rules, sell_rules, mandatory_buy_rules,
                 elif idx - last_idx < mh:
                     candidate = None
 
-        if candidate == 'B' and dwe.breakthrough_prior_high_vetoes_buy(df, idx):
-            from v4_aggressive import v4_v_rev_rules as v4r
-            if not (set(triggered_mandatory_buy or []) & v4r.V4_V_REV_BUY_RULE_NAMES):
-                candidate = None
+        if candidate == 'B' and dwe.buy_prior_high_vetoes_buy(
+            df, idx,
+            buy_triggered=triggered_buy,
+            mandatory_buy_triggered=triggered_mandatory_buy,
+        ):
+            candidate = None
 
         reasons = {
             'buy_triggered': triggered_buy,
@@ -1439,8 +1522,9 @@ def calculate_weights_v2(df, max_iterations=100):
 
 def analyze_signals_v4_aggressive(df, precomputed_weights=None, start_date=None, end_date=None,
                        mandatory_buy_rules_override=None, bearish_candle_mode='slim',
-                       structure_mode='curve'):
-    """V4 激进独立分析入口；勿与 engine_v2 混用。"""
+                       structure_mode='curve', precomputed_signals=None,
+                       atr_arr=None, high_vol_mask=None, lite=False):
+    """V4 激进独立分析入口；勿与 engine_v2 混用。lite=True 时跳过规则浮框/结构快照（池批量加速）。"""
     from v4_aggressive.v4_structure_curves import reset_structure_registry_cache
 
     reset_structure_registry_cache()
@@ -1467,31 +1551,25 @@ def analyze_signals_v4_aggressive(df, precomputed_weights=None, start_date=None,
     dates = df['date'].values if 'date' in df.columns else None
     n = len(close)
 
-    start_offset = 60
-    atr_arr = talib.ATR(high, low, close, timeperiod=V2_ATR_PERIOD) if V2_ATR_STOP_ON else None
-    hvm = _precompute_high_vol_mask(close, high, low, start_offset)
-    from v4_aggressive.bearish_candle_modes import precompute_bearish_pattern_series
-
-    precomputed = {
-        'buy': _precompute_rule_signals(df, buy_rules, start_offset),
-        'sell': _precompute_rule_signals(df, sell_rules, start_offset),
-        'mandatory_buy': _precompute_rule_signals(df, mandatory_buy_rules, start_offset),
-        'mandatory_sell': _precompute_rule_signals(df, mandatory_sell_rules, start_offset),
-        'restriction': _precompute_rule_signals(df, buy_restriction_rules, start_offset),
-    }
-    if '看跌K线形态' in sell_rules:
-        precomputed['sell']['看跌K线形态'] = precompute_bearish_pattern_series(
-            df, start_offset, mode=bearish_candle_mode,
+    if atr_arr is None:
+        atr_arr = talib.ATR(high, low, close, timeperiod=V2_ATR_PERIOD) if V2_ATR_STOP_ON else None
+    if high_vol_mask is None:
+        high_vol_mask = _precompute_high_vol_mask(close, high, low, start_offset)
+    if precomputed_signals is None:
+        precomputed = {
+            'buy': _precompute_rule_signals(df, buy_rules, start_offset),
+            'sell': _precompute_rule_signals(df, sell_rules, start_offset),
+            'mandatory_buy': _precompute_rule_signals(df, mandatory_buy_rules, start_offset),
+            'mandatory_sell': _precompute_rule_signals(df, mandatory_sell_rules, start_offset),
+            'restriction': _precompute_rule_signals(df, buy_restriction_rules, start_offset),
+        }
+        precomputed = patch_v4_precomputed_signals(
+            df, precomputed, start_offset, sell_rules, mandatory_sell_rules,
+            structure_mode=structure_mode, bearish_candle_mode=bearish_candle_mode,
         )
-    if structure_mode == 'legacy':
-        if 'M顶跌破' in mandatory_sell_rules:
-            precomputed['mandatory_sell']['M顶跌破'] = _legacy_mandatory_sell_series(
-                df, 'M顶跌破', start_offset,
-            )
-        if 'V反顶部' in mandatory_sell_rules:
-            precomputed['mandatory_sell']['V反顶部'] = _legacy_mandatory_sell_series(
-                df, 'V反顶部', start_offset,
-            )
+    else:
+        import engine_v2 as ev2
+        precomputed = ev2._clone_precomputed_signals(precomputed_signals)
 
     signals, reasons_list = _mark_bs_points(
         df, buy_rules, sell_rules,
@@ -1499,7 +1577,7 @@ def analyze_signals_v4_aggressive(df, precomputed_weights=None, start_date=None,
         buy_weights, sell_weights, start_offset,
         precomputed_signals=precomputed,
         atr_arr=atr_arr,
-        high_vol_mask=hvm,
+        high_vol_mask=high_vol_mask,
         bearish_candle_mode=bearish_candle_mode,
     )
 
@@ -1545,22 +1623,23 @@ def analyze_signals_v4_aggressive(df, precomputed_weights=None, start_date=None,
                 bi = dwe.bar_index_from_date_str(df, reasons['signal_date'])
                 if bi is not None:
                     sig_bar_idx = bi
-            from v4_aggressive import signal_rule_context as src
-            ann = dwe.signal_extreme_annotation(
-                df, sig_bar_idx, anchor_bar_idx=idx, buy_triggered=buy_disp + mand_buy,
-            )
-            ann = src.enrich_extreme_with_next_prior_high(df, sig_bar_idx, ann)
-            b_row.update(ann)
-            all_buy_rules = buy_disp + mand_buy
-            b_row['rule_details'] = src.build_signal_rule_details(
-                df, idx, all_buy_rules, buy_side=True,
-            )
-            vs = src.build_v_structure_snapshot(df, idx, all_buy_rules)
-            if vs:
-                b_row['v_structure'] = vs
-            ws = src.build_w_structure_snapshot(df, idx)
-            if ws:
-                b_row['w_structure'] = ws
+            if not lite:
+                from v4_aggressive import signal_rule_context as src
+                ann = dwe.signal_extreme_annotation(
+                    df, sig_bar_idx, anchor_bar_idx=idx, buy_triggered=buy_disp + mand_buy,
+                )
+                ann = src.enrich_extreme_with_next_prior_high(df, sig_bar_idx, ann, anchor_bar_idx=idx)
+                b_row.update(ann)
+                all_buy_rules = buy_disp + mand_buy
+                b_row['rule_details'] = src.build_signal_rule_details(
+                    df, idx, all_buy_rules, buy_side=True,
+                )
+                vs = src.build_v_structure_snapshot(df, idx, all_buy_rules)
+                if vs:
+                    b_row['v_structure'] = vs
+                ws = src.build_w_structure_snapshot(df, idx)
+                if ws:
+                    b_row['w_structure'] = ws
             if reasons.get('v_bottom_stop') is not None:
                 b_row['v_bottom_stop'] = reasons['v_bottom_stop']
             paired_signals.append(b_row)
@@ -1591,14 +1670,17 @@ def analyze_signals_v4_aggressive(df, precomputed_weights=None, start_date=None,
                 bi_s = dwe.bar_index_from_date_str(df, reasons['signal_date'])
                 if bi_s is not None:
                     sig_bar_idx_s = bi_s
-            from v4_aggressive import signal_rule_context as src
-            ann_s = dwe.signal_extreme_annotation(df, sig_bar_idx_s, anchor_bar_idx=idx)
-            ann_s = src.enrich_extreme_with_next_prior_high(df, sig_bar_idx_s, ann_s)
-            s_row.update(ann_s)
-            s_row['rule_details'] = src.build_signal_rule_details(
-                df, sig_bar_idx_s, sell_disp + mand_sell, buy_side=False,
-            )
-            src.append_engine_sell_details(s_row, reasons)
+            if not lite:
+                from v4_aggressive import signal_rule_context as src
+                ann_s = dwe.signal_extreme_annotation(df, sig_bar_idx_s, anchor_bar_idx=idx)
+                ann_s = src.enrich_extreme_with_next_prior_high(
+                    df, sig_bar_idx_s, ann_s, anchor_bar_idx=idx,
+                )
+                s_row.update(ann_s)
+                s_row['rule_details'] = src.build_signal_rule_details(
+                    df, sig_bar_idx_s, sell_disp + mand_sell, buy_side=False,
+                )
+                src.append_engine_sell_details(s_row, reasons)
             paired_signals.append(s_row)
             buy_idx = None
 
@@ -1629,7 +1711,7 @@ def analyze_signals_v4_aggressive(df, precomputed_weights=None, start_date=None,
             today_sell_score = last_reasons.get('sell_score', 0)
         today_score = max(today_buy_score, today_sell_score)
 
-    conditions = get_conditions()
+    conditions = get_conditions() if not lite else {}
 
     rets = _trade_net_returns(signals, close, open_vals)
     prd_metrics = {}
@@ -1666,32 +1748,33 @@ def get_conditions():
             {'name': '上影线不过长', 'description': '信号日或确认买入日：上影线>实体×3/4，或上影线≥当日振幅×40%（振幅过窄时不启用占比条款），则不确认/不产生B'},
             {'name': '缩量确认须价涨', 'description': '确认买入日：若成交量相对信号日缩小，则确认日收盘价须高于信号日收盘价，否则不确认B'},
             {'name': '突破5日线', 'description': '当日收盘价 > MA5'},
-            {'name': '至下一前高空间', 'description': '全部买入：信号日最高价至其后下一局部前高（high峰）涨幅须≥3%，否则放弃B'},
+            {'name': '至历史前高空间', 'description': '仅 V底类（V反右侧/激进底/V4V反吞没）与整理突破类（旗形/横盘/N字/放量突破等）：前高仅买入日前历史K线，前高high>买入日最高价，实体上沿（阳收/阴开）至前高实体上沿≥3%，否则放弃B；其余加权买入不校验前高'},
             {'name': '阳线确认', 'description': '买入信号后等1天，下一根交易日为阳线才确认B点（成交价为下一根K线开盘价可配）；若当日命中「看涨K线形态」，则须在「日线序列中紧邻的下一根交易日」以收盘>开盘确认（含周五信号→周一确认）；其它规则仍要求收盘高于信号日。若加权买入规则同日命中≥2条、第一确认日未通过且未跌破前低带与信号收盘−ATR止损较强位，则顺延至再下一交易日最多多确认1天'},
             {'name': '非下跌趋势', 'description': 'MA20上升或价格 > MA20'},
             {'name': '高波动', 'description': 'ATR/收盘高于历史中位数时，买入置信阈值提高、最小持有略延长'},
         ],
         'buy_sufficient': [
-            {'name': '关键形态必买', 'description': 'W底右侧 + V反右侧 + V反激进底部三条 + V4V反吞没；不含旧版「W底突破/V反底部」颈线突破标签'},
+            {'name': '关键形态必买', 'description': 'V反右侧 + V反激进底部三条 + V4V反吞没；V4 不算 W 结构；不含「W底突破/V反底部」'},
             {'name': 'V反右侧（经典）', 'description': '四曲线+ATR 摆动低点；瓶口=左肩摆动高点至 V 底 high 最大；跌深≥4%(均价)；右侧扫60根'},
-            {'name': 'W底右侧', 'description': '与 V 同 registry：ATR 摆动低点双底配对；颈线=两底间 high 最大；颈线上弹≥3%；右侧扫60根'},
             {'name': 'M顶跌破', 'description': 'ATR 摆动高点双顶配对；跌破顶部98%必卖'},
-            {'name': 'V反顶部', 'description': 'ATR 摆动高点为峰；左侧均价抬升≥7%；右侧回落≥3%后跌破峰×98%'},
+            {'name': 'V反顶部', 'description': 'ATR摆动高点为峰；左侧均价抬升≥7%、右侧回落≥3%后跌破峰×98%；若峰仍在大V右侧且high未触瓶口(neck×98%)，不判局部V反顶'},
             {'name': 'V反激进底-金针', 'description': 'V 左侧金针探底阳线（通用锤子线：收阳、下影≥振幅1/3、下影≥0.75×实体、上影≤振幅45%），影线最低点为 V 底最低；前低支撑则信号日买，否则次日阳线且收盘高于金针则次日买；确认买入日 (MA20−最高价)/最高价>3%'},
             {'name': 'V反激进底-止跌', 'description': 'V 左侧下跌动能减弱、典型价止跌，收盘价站上 MA5，且确认日 (MA20−最高价)/最高价>3%，信号日直接买入'},
             {'name': 'V反激进底-大低开阳', 'description': 'V 左侧大低开大阳线；前低支撑或次日阳线收盘高于该阳线则确认；确认买入日 (MA20−最高价)/最高价>2%'},
             {'name': 'V反激进底动态止损', 'description': '由 V反激进底-金针/止跌/大低开阳 买入的仓位：止损价=V 反底部区间最低点；持仓期间若收盘价低于该最低点，强制卖出（标签「V反激进底破V底止损」）'},
             {'name': 'V反激进底破5日线', 'description': '仅当买入日有且仅有 V反激进底 三条之一（无其它必买/加权买入叠加）：买入后若连续 2 个相邻交易日收盘价均跌破 MA5，第 2 日收盘卖出（标签「V反激进底连2日破5日线」）'},
+            {'name': 'V反MA20压制卖出', 'description': 'V底/V右持仓：MA20明显走空；近5日仅1根触MA20被拒且该K线长上影（上影>实体，比例>1:1）→当日必卖'},
+            {'name': 'V反MA20压制破5日线', 'description': 'V底/V右持仓：①MA20走空触线被拒（非单根+长上影）→挂起后破MA5卖；②B后high贴近MA20(≤1%)且冲高回落→挂起后破MA5卖'},
             {'name': 'V4V反吞没', 'description': 'V 底区出现吞没大阳线为信号日，次日收阳确认后于次日买入；标签「V4V反吞没」'},
             {'name': '加权买入', 'description': '分组 cap 后 buy_score > sell_score；MACD/价升量增须配合看涨形态或突破；与 V3 相同 T+1 确认路径（吞没/长上影/N字/旗形等）'},
             {'name': '双针探底', 'description': 'V/W 左侧跌≥4%；第一针在信号日前(下影/实体≥0.8)，第二针=信号日；两针低点贴 V/W 底且价差<0.5%；T+1 阳线且收盘>MA5 确认 B'},
-            {'name': 'N字形突破', 'description': '须在 W底右侧 或 V反右侧 背景下；前高=右侧至信号日 high 最高；触瓶口后 N 字回踩再突破，带量'},
+            {'name': 'N字形突破', 'description': '仅 V反右侧：先触瓶口(V最高点)→回踩→信号日 high 突破瓶口；带量；T+1 阳线确认'},
         ],
         'sell_necessary': [
             {'name': '当前持仓', 'description': '最近一个信号为B'},
         ],
         'sell_sufficient': [
-            {'name': '关键形态必卖', 'description': 'M顶跌破、V反顶部、旗形跌破、均线趋势打破必卖；高位压力带+放巨量阴线（高位放量阴线看跌）立即必卖，不须等跌破5日线'},
+            {'name': '关键形态必卖', 'description': 'M顶跌破、V反顶部、旗形跌破、均线趋势打破必卖；高位压力带+放巨量阴线；高开低走长阴压区必卖（压力带+跳空高开+长阴，不须前日1.5倍量）；高位放量阴线看跌立即必卖，不须等跌破5日线'},
             {'name': '沿均线主升破位', 'description': '识别主升贴 MA5/10/20 后首次跌破对应均线，计入卖出规则加权分（需满足计数卖等条件）'},
             {'name': '计数卖出', 'description': '≥2条卖出规则触发且sell_score > buy_score；浮亏超阈值时降为1条；趋势线阻力不可单独构成卖出'},
             {'name': '看跌K线形态', 'description': '仅看跌吞没、上吊线、乌云盖顶；上吊线须收盘在20日均线上方；不含黄昏星/黄昏十字/射击之星及守MA5延迟卖'},

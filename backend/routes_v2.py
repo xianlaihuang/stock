@@ -1,4 +1,6 @@
+import os
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from flask import request, jsonify
 from app import app
@@ -73,26 +75,63 @@ def _engine_block_from_result(result, depth_used):
     }
 
 
-def _run_calculate_weights_for_stock(stock_code, trigger='manual'):
+def _pool_trigger(trigger):
+    return str(trigger or '').startswith('pool')
+
+
+def _pool_max_workers(requested=None):
+    if requested is not None:
+        try:
+            w = int(requested)
+            if w >= 1:
+                return min(w, 16)
+        except (TypeError, ValueError):
+            pass
+    try:
+        w = int(os.environ.get('POOL_MAX_WORKERS', '8'))
+    except (TypeError, ValueError):
+        w = 4
+    cpu = os.cpu_count() or 4
+    return max(1, min(w, cpu, 16))
+
+
+def _pool_weights_max_iterations(trigger):
+    if not _pool_trigger(trigger):
+        return 100
+    try:
+        return max(20, min(int(os.environ.get('POOL_WEIGHTS_MAX_ITER', '50')), 100))
+    except (TypeError, ValueError):
+        return 50
+
+
+def _run_calculate_weights_for_stock(
+    stock_code, trigger='manual', *, klines=None, stock_name=None,
+):
     """公式计算权重并写日志；返回 (payload_dict, http_status)。"""
-    klines = KlineData.get(stock_code, period='day')
+    if klines is None:
+        klines = KlineData.get(stock_code, period='day')
     if not klines or len(klines) < 200:
         msg = f'数据不足（当前{len(klines) if klines else 0}条，至少需要200条），请先抓取数据'
         arl.save_run_log(
             stock_code, 'calculate_weights', success=False,
-            duration_ms=0, message=msg, trigger=trigger,
+            duration_ms=0, message=msg, trigger=trigger, stock_name=stock_name,
         )
         return {'success': False, 'message': msg, 'stock_code': stock_code}, 400
 
     df = _klines_to_df(klines)
     t0 = time.perf_counter()
+    quiet = _pool_trigger(trigger)
+    max_iter = _pool_weights_max_iterations(trigger)
     try:
-        result = ev2.calculate_weights_v2(df)
+        result = ev2.calculate_weights_v2(
+            df, max_iterations=max_iter, quiet=quiet,
+        )
     except Exception as e:
         arl.save_run_log(
             stock_code, 'calculate_weights', success=False,
             duration_ms=int((time.perf_counter() - t0) * 1000),
             message=str(e), trigger=trigger, depth_used=len(df),
+            stock_name=stock_name,
         )
         return {'success': False, 'message': str(e), 'stock_code': stock_code}, 500
 
@@ -112,6 +151,7 @@ def _run_calculate_weights_for_stock(stock_code, trigger='manual'):
             'win_rate_pct': win_rate,
             'iteration_count': result['iteration_count'],
         },
+        stock_name=stock_name,
     )
 
     buy_list = []
@@ -156,38 +196,44 @@ def v2_calculate_weights():
     return jsonify(payload), status
 
 
-def _run_analyze_for_stock(stock_code, *, start_date=None, end_date=None, trigger='manual'):
+def _run_analyze_for_stock(
+    stock_code, *, start_date=None, end_date=None, trigger='manual',
+    klines=None, cached_weights=None, stock_name=None,
+):
     """运行 V2/V3/V4 分析并写日志；返回 (payload_dict, http_status)。"""
-    klines = KlineData.get(stock_code, period='day')
+    if klines is None:
+        klines = KlineData.get(stock_code, period='day')
     if not klines or len(klines) < 30:
         msg = f'数据不足（当前{len(klines) if klines else 0}条），请先抓取数据'
         arl.save_run_log(
             stock_code, 'analyze', success=False, duration_ms=0,
-            message=msg, trigger=trigger,
+            message=msg, trigger=trigger, stock_name=stock_name,
         )
         return {'success': False, 'message': msg, 'stock_code': stock_code}, 400
 
     df = _klines_to_df(klines)
     t0 = time.perf_counter()
-    cached = ev2.load_weights(stock_code)
+    if cached_weights is None:
+        cached_weights = ev2.load_weights(stock_code)
     precomputed = None
-    if cached:
+    if cached_weights:
         precomputed = {
-            'buy_weights': cached['buy_weights'],
-            'sell_weights': cached['sell_weights'],
+            'buy_weights': cached_weights['buy_weights'],
+            'sell_weights': cached_weights['sell_weights'],
         }
 
     try:
         dual = ev2.analyze_signals_dual(
             df, precomputed_weights=precomputed,
             start_date=start_date, end_date=end_date,
+            lite=_pool_trigger(trigger),
         )
     except Exception as e:
         arl.save_run_log(
             stock_code, 'analyze', success=False,
             duration_ms=int((time.perf_counter() - t0) * 1000),
             message=str(e), trigger=trigger, depth_used=len(df),
-            start_date=start_date, end_date=end_date,
+            start_date=start_date, end_date=end_date, stock_name=stock_name,
         )
         return {'success': False, 'message': str(e), 'stock_code': stock_code}, 500
 
@@ -209,6 +255,7 @@ def _run_analyze_for_stock(stock_code, *, start_date=None, end_date=None, trigge
         v3_portfolio=block3.get('portfolio_sim'),
         v4_portfolio=block4.get('portfolio_sim') if block4 else None,
         depth_used=depth, start_date=start_date, end_date=end_date,
+        stock_name=stock_name,
     )
 
     payload = {
@@ -481,7 +528,10 @@ def v2_run_logs_pool():
     })
 
 
-def _pool_run_one_stock(code, *, run_weights=True, run_analyze=True, trigger='pool_batch'):
+def _pool_run_one_stock(
+    code, *, run_weights=True, run_analyze=True, trigger='pool_batch',
+    klines=None, cached_weights=None, stock_name=None,
+):
     """单只股票：默认先公式计算再运行分析。"""
     row = {
         'stock_code': code,
@@ -491,7 +541,9 @@ def _pool_run_one_stock(code, *, run_weights=True, run_analyze=True, trigger='po
         'message': '',
     }
     if run_weights:
-        wpayload, wstatus = _run_calculate_weights_for_stock(code, trigger=trigger)
+        wpayload, wstatus = _run_calculate_weights_for_stock(
+            code, trigger=trigger, klines=klines, stock_name=stock_name,
+        )
         row['weights_ok'] = wpayload.get('success', False)
         row['weights_return_pct'] = wpayload.get('weights_return_pct')
         row['weights_message'] = wpayload.get('message', '')
@@ -500,12 +552,20 @@ def _pool_run_one_stock(code, *, run_weights=True, run_analyze=True, trigger='po
             row['message'] = wpayload.get('message', '公式计算失败')
             row['http_status'] = wstatus
             return row
+        if run_analyze and cached_weights is None and wpayload.get('success'):
+            cached_weights = {
+                'buy_weights': wpayload.get('buy_weights'),
+                'sell_weights': wpayload.get('sell_weights'),
+            }
     if run_analyze:
-        if not run_weights and not ev2.load_weights(code):
+        if not run_weights and not (cached_weights or ev2.load_weights(code)):
             row['message'] = '未计算权重，已跳过分析'
             row['skipped'] = True
             return row
-        apayload, astatus = _run_analyze_for_stock(code, trigger=trigger)
+        apayload, astatus = _run_analyze_for_stock(
+            code, trigger=trigger, klines=klines,
+            cached_weights=cached_weights, stock_name=stock_name,
+        )
         row['analyze_ok'] = apayload.get('success', False)
         row['v2_return_pct'] = apayload.get('v2_return_pct')
         row['v3_return_pct'] = apayload.get('v3_return_pct')
@@ -553,25 +613,71 @@ def v2_pool_run():
     if not run_weights and not run_analyze:
         return jsonify({'success': False, 'message': '请至少选择公式计算或运行分析'}), 400
 
-    results = []
-    ok = 0
-    fail = 0
-    skip = 0
-    for code in codes:
-        row = _pool_run_one_stock(
-            code, run_weights=run_weights, run_analyze=run_analyze, trigger=trigger,
+    t_batch = time.perf_counter()
+    names_map = arl.stock_names_map(codes)
+    klines_map = KlineData.get_many(codes, period='day')
+    weights_map = ev2.load_weights_many(codes) if run_analyze and not run_weights else {}
+
+    workers = _pool_max_workers(data.get('max_workers'))
+    use_parallel = workers > 1 and len(codes) > 1
+
+    def _run_code(code):
+        return _pool_run_one_stock(
+            code,
+            run_weights=run_weights,
+            run_analyze=run_analyze,
+            trigger=trigger,
+            klines=klines_map.get(code),
+            cached_weights=weights_map.get(code),
+            stock_name=names_map.get(code),
         )
+
+    results = []
+    ok = fail = skip = 0
+
+    if use_parallel:
+        os.environ['POOL_BATCH_ACTIVE'] = '1'
+    try:
+        if use_parallel:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                future_map = {pool.submit(_run_code, code): code for code in codes}
+                by_code = {}
+                for fut in as_completed(future_map):
+                    code = future_map[fut]
+                    try:
+                        by_code[code] = fut.result()
+                    except Exception as e:
+                        by_code[code] = {
+                            'stock_code': code,
+                            'success': False,
+                            'message': str(e),
+                        }
+                for code in codes:
+                    row = by_code.get(code) or {
+                        'stock_code': code, 'success': False, 'message': '未返回结果',
+                    }
+                    results.append(row)
+        else:
+            for code in codes:
+                results.append(_run_code(code))
+    finally:
+        if use_parallel:
+            os.environ.pop('POOL_BATCH_ACTIVE', None)
+
+    for row in results:
         if row.get('skipped'):
             skip += 1
         elif row.get('success'):
             ok += 1
         else:
             fail += 1
-        results.append(row)
+
+    batch_ms = int((time.perf_counter() - t_batch) * 1000)
+    mode = f'并行×{workers}' if use_parallel else '顺序'
 
     return jsonify({
         'success': True,
-        'message': f'批量完成：成功 {ok}，失败 {fail}，跳过 {skip}',
+        'message': f'批量完成（{mode}）：成功 {ok}，失败 {fail}，跳过 {skip}，耗时 {batch_ms}ms',
         'summary': {
             'total': len(codes),
             'ok': ok,
@@ -579,6 +685,10 @@ def v2_pool_run():
             'skip': skip,
             'run_weights': run_weights,
             'run_analyze': run_analyze,
+            'parallel': use_parallel,
+            'max_workers': workers,
+            'batch_duration_ms': batch_ms,
+            'weights_max_iterations': _pool_weights_max_iterations(trigger) if run_weights else None,
         },
         'results': results,
     })

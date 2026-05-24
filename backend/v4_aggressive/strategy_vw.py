@@ -21,20 +21,15 @@ def _filtered_close_lows(close, n):
 
 
 def detect_w_right_bottom_events_legacy(close, high, low, n):
-    """改动前：收盘低点窗口 W 识别。"""
-    from v4_aggressive.structure_legacy import detect_w_right_bottom_events_legacy as _leg
-    return _dedupe_by_entry(_leg(close, high, low, n))
+    """V4 已禁用 W 结构计算，恒返回空列表。"""
+    del close, high, low, n
+    return []
 
 
 def detect_w_right_bottom_events(close, high, low, n, open_=None):
-    """
-    W 底：与 V 相同 — 全历史曲线 + ATR 摆动低点配对；颈线=两底间 high 最大；右侧最多扫 60 根。
-    """
-    from v4_aggressive.v4_structure_curves import get_structure_registry
-
-    o = open_ if open_ is not None else close
-    reg = get_structure_registry(o, high, low, close, n)
-    return _dedupe_by_entry(reg.to_w_right_events(), min_gap=5)
+    """V4 已禁用 W 结构计算，恒返回空列表。"""
+    del close, high, low, n, open_
+    return []
 
 
 def detect_v_right_bottom_events_legacy(close, high, low, n, bounce_min=0.02, drop_min=0.05, open_=None):
@@ -241,7 +236,7 @@ def signal_near_vw_left_bottom(close, high, low, n, signal_idx, min_drop=None):
 # N 字形买入：须在 W/V 右侧背景下，前高取右侧起点至当日的最高价 high（非收盘）
 N_SHAPE_MAX_SPAN_FROM_ENTRY = 60
 N_SHAPE_NECK_TOUCH_TOL = 0.998
-N_SHAPE_BREAK_PRIOR_HIGH_EPS = 1.001
+N_SHAPE_BREAK_NECK_EPS = 1.001
 N_SHAPE_PULLBACK_MAX_VS_PEAK = 0.98
 N_SHAPE_PULLBACK_MIN_VS_PEAK = 0.88
 N_SHAPE_PULLBACK_NEAR_NECK_UP = 1.025
@@ -263,6 +258,36 @@ def prior_high_high_before_signal(high, entry, idx):
     if idx <= entry:
         return None
     return prior_high_high_right_to_day(high, entry, idx - 1)
+
+
+def find_v_right_context_before(close, high, low, n, idx, max_span=None, open_=None):
+    """V4：取 idx 之前最近一笔 V反右侧 entry（不含 W）。"""
+    if max_span is None:
+        max_span = N_SHAPE_MAX_SPAN_FROM_ENTRY
+    idx = int(idx)
+    if idx < 15:
+        return None
+    v_e = detect_v_right_bottom_events(close, high, low, n, open_=open_)
+    best = None
+    for ev in v_e:
+        e = int(ev["entry"])
+        if e >= idx or idx - e > max_span:
+            continue
+        if best is None or e > best["entry"]:
+            best = {
+                "kind": "V",
+                "entry": e,
+                "neck": float(ev["neck"]),
+                "stop_ref": float(ev["stop_ref"]),
+            }
+    if best is None:
+        return None
+    ph = prior_high_high_right_to_day(high, best["entry"], idx)
+    if ph is None or ph <= 0:
+        return None
+    best["prior_high_to_day"] = ph
+    best["prior_high_before"] = prior_high_high_before_signal(high, best["entry"], idx)
+    return best
 
 
 def find_vw_right_context_before(close, high, low, n, idx, max_span=None):
@@ -316,14 +341,13 @@ def neck_touched_between_bars(high, low, entry, end_idx, neck, tol=None):
     return False
 
 
-def n_shape_vw_bottle_buy_signal(close, high, low, vol, idx, open_=None, vol_mult=1.12):
+def n_shape_v_bottle_buy_signal(close, high, low, vol, idx, open_=None, vol_mult=1.12):
     """
-    N 字形买入（不可脱离 W/V 右侧瓶口单独成立）：
-    - 须在 W 右侧或 V 反右侧背景下（最近一笔右侧 entry 至信号日不超过 max_span）；
-    - 前高 = 右侧 entry 至信号日（含）的最高价 high 最大值（非收盘）；
-    - entry 至信号日前须曾触及瓶口（颈线/左侧瓶口）；
-    - N 字：右侧区间内前高—回踩瓶口区—再走强；
-    - W：当日 high 突破「右侧至昨日」的前高；V：瓶口回踩后收阳走强。
+    V4 N 字形买入（仅 V反右侧，不可脱离 V 单独成立）：
+    - 须在 V 反右侧背景下（entry 至信号日 ≤ max_span）；
+    - 右侧先触达瓶口 neck（V 最高点）；
+    - 触瓶口后回踩（N 字中间腿，低点仍在瓶口附近）；
+    - 信号日 high 突破瓶口 neck，收阳走强、带量。
     """
     idx = int(idx)
     n = len(close)
@@ -331,27 +355,24 @@ def n_shape_vw_bottle_buy_signal(close, high, low, vol, idx, open_=None, vol_mul
         return False
     if open_ is None:
         open_ = close
-    ctx = find_vw_right_context_before(close, high, low, n, idx)
+    ctx = find_v_right_context_before(close, high, low, n, idx, open_=open_)
     if ctx is None:
         return False
-    entry = ctx["entry"]
-    neck = ctx["neck"]
-    kind = ctx["kind"]
-    prior_before = ctx.get("prior_high_before")
-    if prior_before is None or prior_before <= 0:
+    entry = int(ctx["entry"])
+    neck = float(ctx["neck"])
+    if neck <= 0:
         return False
     if not neck_touched_between_bars(high, low, entry, idx, neck):
         return False
     if idx <= entry + 2:
         return False
-    # 前高腿：右侧起点至信号日前一日的 high 峰值（与 prior 区间一致，不用固定 28～16 窗）
-    peak_seg = high[entry:idx]
-    if len(peak_seg) < 2:
+    pre_seg = high[entry:idx]
+    if len(pre_seg) < 2:
         return False
-    rel_peak = int(np.argmax(peak_seg))
+    rel_peak = int(np.argmax(pre_seg))
     leg_peak_idx = entry + rel_peak
-    leg_peak = float(peak_seg[rel_peak])
-    if leg_peak <= 0:
+    leg_peak = float(pre_seg[rel_peak])
+    if leg_peak < neck * N_SHAPE_NECK_TOUCH_TOL:
         return False
     if leg_peak_idx >= idx - 1:
         return False
@@ -362,15 +383,14 @@ def n_shape_vw_bottle_buy_signal(close, high, low, vol, idx, open_=None, vol_mul
         return False
     if seg_low > neck * N_SHAPE_PULLBACK_NEAR_NECK_UP:
         return False
+    if float(high[idx]) <= neck * N_SHAPE_BREAK_NECK_EPS:
+        return False
     o = float(open_[idx])
     c = float(close[idx])
     if c <= o:
         return False
     if c <= float(close[idx - 1]):
         return False
-    if kind == "W":
-        if float(high[idx]) <= prior_before * N_SHAPE_BREAK_PRIOR_HIGH_EPS:
-            return False
     vol_ma = float(np.mean(vol[max(0, idx - 5) : idx]))
     if vol_ma <= 0 or float(vol[idx]) < vol_ma * vol_mult:
         return False

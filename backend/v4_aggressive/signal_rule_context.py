@@ -22,20 +22,33 @@ def _bar_line(df, i, role, price=None):
     return f'{role}: {d}{px}'
 
 
-def _next_prior_high_lines(df, idx):
-    high = df['high'].values.astype(float) if 'high' in df.columns else df['close'].values.astype(float)
-    ni, np_ = dwe.find_next_prior_high_bar(high, idx)
-    if ni is None:
-        return ['下一前高: 信号日后120根内未找到更高局部峰']
-    sh = float(high[idx])
-    upside = (float(np_) - sh) / sh * 100.0 if sh > 0 else None
+def _historical_prior_high_lines(df, idx, buy_triggered=None):
+    close = df['close'].values.astype(float)
+    open_ = df['open'].values.astype(float) if 'open' in df.columns else close
+    high = df['high'].values.astype(float) if 'high' in df.columns else close
+    buy_high = float(high[idx])
+    buy_body = dwe.bar_body_top_at(open_, close, idx)
+    pi, pw, prior_body = dwe.find_historical_prior_high_for_buy(
+        df, idx, buy_triggered=buy_triggered,
+    )
+    if pi is None:
+        return ['历史前高: 买入日前未找到 high 高于买入日最高价的合格前高']
+    upside = (prior_body - buy_body) / buy_body * 100.0 if buy_body > 0 else None
     lines = [
-        _bar_line(df, idx, '信号日最高价', sh),
-        _bar_line(df, ni, '下一前高', np_),
+        _bar_line(df, idx, '买入日最高价', buy_high),
+        f'买入日实体上沿: {buy_body:.2f}',
+        _bar_line(df, pi, '历史前高(实体上沿)', prior_body),
+        f'历史前高最高价: {pw:.2f}',
     ]
     if upside is not None:
-        lines.append(f'信号日→下一前高空间: {upside:.2f}%（门槛≥3%）')
+        lines.append(
+            f'实体上沿→历史前高实体上沿空间: {upside:.2f}%（门槛≥3%，仅回看买入日前）'
+        )
     return lines
+
+
+def _next_prior_high_lines(df, idx, buy_triggered=None):
+    return _historical_prior_high_lines(df, idx, buy_triggered=buy_triggered)
 
 
 def _gap_lines(df, idx):
@@ -244,11 +257,25 @@ def _rule_context_lines(df, idx, rule_name):
     if rule_name == '头肩顶跌破':
         return _hs_top_lines(df, idx)
     if rule_name == 'W底右侧':
-        return _w_right_lines(df, idx)
+        return ['V4 已禁用 W 结构，不产生 W底右侧 信号']
     if rule_name in ('V反右侧', 'V反底部'):
         return _v_right_lines(df, idx)
-    if rule_name in ('接近前高巨量阴增', '高位放量阴线看跌'):
-        return _pressure_lines(df, idx)
+    if rule_name in ('接近前高巨量阴增', '高位放量阴线看跌', '高开低走长阴压区必卖'):
+        lines = _pressure_lines(df, idx)
+        if rule_name == '高开低走长阴压区必卖':
+            close = df['close'].values.astype(float)
+            open_ = df['open'].values.astype(float) if 'open' in df.columns else close
+            high = df['high'].values.astype(float) if 'high' in df.columns else close
+            low = df['low'].values.astype(float) if 'low' in df.columns else close
+            o, c, h, l = float(open_[idx]), float(close[idx]), float(high[idx]), float(low[idx])
+            pc = float(close[idx - 1]) if idx >= 1 else c
+            body = o - c
+            rng = max(h - l, 1e-9)
+            lines.extend([
+                f'前收: {pc:.2f} → 开 {o:.2f}（跳空高开 {(o/pc-1)*100:.2f}%）',
+                f'长阴: 收 {c:.2f}，实体/振幅 {body/rng*100:.1f}%，开盘→收回落 {body/max(o-l,1e-9)*100:.1f}%',
+            ])
+        return lines
     if rule_name in ('V反激进底-金针', 'V反激进底-止跌', 'V反激进底-大低开阳'):
         return _v_aggr_lines(df, idx, rule_name)
     if rule_name == 'V4V反吞没':
@@ -257,19 +284,21 @@ def _rule_context_lines(df, idx, rule_name):
             lines.insert(0, '吞没信号日通常为确认日前一根')
         return lines
     if rule_name == 'N字形突破':
-        from v4_aggressive.strategy_vw import find_vw_right_context_before
+        from v4_aggressive.strategy_vw import find_v_right_context_before
         close = df['close'].values.astype(float)
         high = df['high'].values.astype(float) if 'high' in df.columns else close
         low = df['low'].values.astype(float) if 'low' in df.columns else close
+        open_ = df['open'].values.astype(float) if 'open' in df.columns else close
         n = len(close)
-        ctx = find_vw_right_context_before(close, high, low, n, idx, max_span=60)
+        ctx = find_v_right_context_before(close, high, low, n, idx, max_span=60, open_=open_)
         if ctx is None:
-            return ['N字形: 前60根内无 W/V 右侧背景']
+            return ['N字形: 前60根内无 V反右侧 背景（V4 不与 W 绑定）']
         entry = ctx.get('entry')
+        neck = ctx.get('neck')
         return [
-            _bar_line(df, entry, f'背景{ctx.get("kind","")}右侧日'),
-            f'瓶口: {ctx.get("neck")}',
-            f'突破参照 high: {ctx.get("prior_high_before")}',
+            _bar_line(df, entry, 'V反右侧日'),
+            f'瓶口(V最高点): {neck}',
+            f'突破要求: high > 瓶口×{1.001:.3f}',
             _bar_line(df, idx, 'N字突破日'),
         ]
     return None
@@ -333,22 +362,8 @@ def build_v_structure_snapshot(df, confirm_bar_idx, rule_names=None):
 
 
 def build_w_structure_snapshot(df, confirm_bar_idx):
-    open_ = df['open'].values.astype(float) if 'open' in df.columns else df['close'].values.astype(float)
-    high = df['high'].values.astype(float) if 'high' in df.columns else df['close'].values.astype(float)
-    low = df['low'].values.astype(float) if 'low' in df.columns else df['close'].values.astype(float)
-    close = df['close'].values.astype(float)
-    n = len(close)
-    for ev in detect_w_right_bottom_events(close, high, low, n, open_=open_):
-        if int(ev['entry']) != int(confirm_bar_idx):
-            continue
-        return {
-            'kind': 'W',
-            'left_bottom_date': _bar_date(df, ev.get('idx1')),
-            'right_bottom_date': _bar_date(df, ev.get('idx2')),
-            'right_entry_date': _bar_date(df, confirm_bar_idx),
-            'neck_high': round(float(ev['neck']), 2),
-            'stop_ref': round(float(ev['stop_ref']), 2),
-        }
+    """V4 已禁用 W 结构。"""
+    del df, confirm_bar_idx
     return None
 
 
@@ -391,19 +406,8 @@ def append_engine_sell_details(row, reasons):
     return row
 
 
-def enrich_extreme_with_next_prior_high(df, signal_bar_idx, annotation: dict):
-    """为买入标注补充「下一前高」日期（突破前高空间分析）。"""
-    if not annotation:
-        annotation = {}
-    high = df['high'].values.astype(float) if 'high' in df.columns else df['close'].values.astype(float)
-    signal_bar_idx = int(signal_bar_idx)
-    ni, np_ = dwe.find_next_prior_high_bar(high, signal_bar_idx)
-    if ni is not None:
-        annotation['next_prior_high_date'] = _bar_date(df, ni)
-        annotation['next_prior_high_price'] = round(float(np_), 2)
-        sh = float(high[signal_bar_idx])
-        if sh > 0:
-            annotation['upside_to_next_prior_high_pct'] = round(
-                (float(np_) - sh) / sh * 100.0, 2
-            )
-    return annotation
+def enrich_extreme_with_next_prior_high(
+    df, signal_bar_idx, annotation: dict, anchor_bar_idx=None,
+):
+    """兼容旧名；V4 不再往后扫描前高。"""
+    return annotation or {}

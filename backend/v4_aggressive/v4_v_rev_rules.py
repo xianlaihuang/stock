@@ -79,6 +79,158 @@ V4_BIG_YANG_BODY_RANGE_MIN = 0.45
 V4_STABILIZE_AP_WINDOW = 3
 V4_MOMENTUM_DOWN_SHRINK_RATIO = 0.88
 
+# V底 / V反右侧：MA20 明显走空 + 压制 → 引擎层卖出（形态分 immediate / 破 MA5）
+V4_V_REV_MA20_SUPPRESS_SELL_REASON = 'V反MA20压制卖出'
+V4_V_REV_MA20_MA5_SELL_REASON = 'V反MA20压制破5日线'
+V4_MA20_DOWNTREND_LOOKBACK = 10
+V4_MA20_DOWNTREND_MIN_DROP = 0.005
+V4_MA20_DOWNTREND_MIN_DOWN_DAYS = 3
+V4_MA20_TOUCH_LOW_RATIO = 0.997
+V4_MA20_REJECT_CLOSE_RATIO = 0.998
+V4_MA20_SUPPRESS_LOOKBACK = 5
+V4_MA20_UPPER_SHADOW_VS_BODY = 1.0
+V4_MA20_NEAR_HIGH_PCT = 0.01
+V4_MA20_RALLY_FADE_DROP_MIN = 0.30
+V4_MA20_RALLY_FADE_UPPER_MIN = 0.25
+
+
+def is_v_rev_context_buy(mandatory_buy_triggered=None, buy_triggered=None):
+    """买入是否属于 V底 / V反右侧 语境（V4_V_REV_BUY_RULE_NAMES）。"""
+    names = set(mandatory_buy_triggered or []) | set(buy_triggered or [])
+    return bool(names & V4_V_REV_BUY_RULE_NAMES)
+
+
+def is_ma20_clear_downtrend(ma20, idx, lookback=None, min_drop=None, min_down_days=None):
+    """MA20 明显走空：低于 lookback 前且近端多数下行。"""
+    lookback = lookback if lookback is not None else V4_MA20_DOWNTREND_LOOKBACK
+    min_drop = min_drop if min_drop is not None else V4_MA20_DOWNTREND_MIN_DROP
+    min_down_days = min_down_days if min_down_days is not None else V4_MA20_DOWNTREND_MIN_DOWN_DAYS
+    idx = int(idx)
+    if idx < lookback:
+        return False
+    m0 = float(ma20[idx])
+    ml = float(ma20[idx - lookback])
+    if np.isnan(m0) or np.isnan(ml) or ml <= 0:
+        return False
+    if m0 >= ml * (1.0 - float(min_drop)):
+        return False
+    down_days = 0
+    for k in range(idx - 4, idx + 1):
+        if k < 1:
+            continue
+        if float(ma20[k]) <= float(ma20[k - 1]) * 1.0002:
+            down_days += 1
+    return down_days >= int(min_down_days)
+
+
+def is_ma20_touch_reject_bar(high, close, open_, ma20, idx):
+    """当日 high 触 MA20、收盘被拒于其下。"""
+    idx = int(idx)
+    m = float(ma20[idx])
+    if np.isnan(m) or m <= 0:
+        return False
+    h, c = float(high[idx]), float(close[idx])
+    return h >= m * V4_MA20_TOUCH_LOW_RATIO and c <= m * V4_MA20_REJECT_CLOSE_RATIO
+
+
+def ma20_touch_reject_indices(high, close, open_, ma20, end_idx, lookback=None):
+    """lookback 窗口内触线被拒的棒索引。"""
+    lookback = lookback if lookback is not None else V4_MA20_SUPPRESS_LOOKBACK
+    end_idx = int(end_idx)
+    i0 = max(0, end_idx - lookback + 1)
+    out = []
+    for j in range(i0, end_idx + 1):
+        if is_ma20_touch_reject_bar(high, close, open_, ma20, j):
+            out.append(j)
+    return out
+
+
+def has_long_upper_shadow_bar(open_, high, low, close, idx):
+    """长上影：上影线 > 实体（比例 > 1:1）。"""
+    idx = int(idx)
+    o, h, lo, c = float(open_[idx]), float(high[idx]), float(low[idx]), float(close[idx])
+    if not all(np.isfinite(x) for x in (o, h, lo, c)):
+        return False
+    upper = h - max(o, c)
+    if upper <= 0:
+        return False
+    body = abs(c - o)
+    min_body = 1e-10 * max(abs(c), abs(o), 1e-9)
+    if body < min_body:
+        return False
+    return upper > body * V4_MA20_UPPER_SHADOW_VS_BODY
+
+
+def v_rev_ma20_suppress_immediate_sell(open_, high, low, close, ma20, idx):
+    """
+    单根 K 线 MA20 压制 + 长上影 → 当日可 S。
+    近端窗口内仅 1 根触线被拒，且为当日，且上影足够长。
+    """
+    idx = int(idx)
+    if not is_ma20_clear_downtrend(ma20, idx):
+        return False
+    if not is_ma20_touch_reject_bar(high, close, open_, ma20, idx):
+        return False
+    hits = ma20_touch_reject_indices(high, close, open_, ma20, idx)
+    if len(hits) != 1 or hits[0] != idx:
+        return False
+    return has_long_upper_shadow_bar(open_, high, low, close, idx)
+
+
+def v_rev_ma20_suppress_should_arm_ma5(open_, high, low, close, ma20, idx):
+    """
+    非「单根+长上影」形态：MA20 走空且出现触线被拒，等待后续破 MA5 再 S。
+    """
+    idx = int(idx)
+    if not is_ma20_clear_downtrend(ma20, idx):
+        return False
+    if not is_ma20_touch_reject_bar(high, close, open_, ma20, idx):
+        return False
+    return not v_rev_ma20_suppress_immediate_sell(open_, high, low, close, ma20, idx)
+
+
+def v_rev_ma20_blocks_v_buy(open_, high, low, close, ma20, idx):
+    """新开 V 底/V 右：明显走空且当日触 MA20 被拒则不买。"""
+    idx = int(idx)
+    if not is_ma20_clear_downtrend(ma20, idx):
+        return False
+    return is_ma20_touch_reject_bar(high, close, open_, ma20, idx)
+
+
+def is_high_near_ma20(high, ma20, idx, near_pct=None):
+    """当日最高价与 MA20 价差 ≤ near_pct（默认 1%）。"""
+    near_pct = V4_MA20_NEAR_HIGH_PCT if near_pct is None else near_pct
+    idx = int(idx)
+    m = float(ma20[idx])
+    h = float(high[idx])
+    if np.isnan(m) or m <= 0 or h <= 0:
+        return False
+    return abs(h - m) / m <= float(near_pct)
+
+
+def is_rally_fade_bar(open_, high, low, close, idx):
+    """冲高回落：上探后自高点明显回落。"""
+    idx = int(idx)
+    o, h, l, c = float(open_[idx]), float(high[idx]), float(low[idx]), float(close[idx])
+    rng = h - l
+    if rng <= 1e-12:
+        return False
+    if (h - c) / rng >= V4_MA20_RALLY_FADE_DROP_MIN:
+        return True
+    upper = h - max(o, c)
+    return upper / rng >= V4_MA20_RALLY_FADE_UPPER_MIN
+
+
+def v_rev_ma20_rally_fade_near_ma20_should_arm_ma5(open_, high, low, close, ma20, idx):
+    """
+    B 后某日冲高回落且 high 贴近 MA20（≤1%）→ 挂起；
+    后续收盘破 MA5 按 V反MA20压制破5日线 处理（不要求 MA20 走空）。
+    """
+    idx = int(idx)
+    if not is_high_near_ma20(high, ma20, idx):
+        return False
+    return is_rally_fade_bar(open_, high, low, close, idx)
+
 
 def _ma20_premium_ok(high, ma20, idx, min_pct):
     """

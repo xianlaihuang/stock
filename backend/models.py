@@ -53,6 +53,23 @@ class KlineData:
             return False
 
     @staticmethod
+    def get_many(codes, period='day'):
+        """批量读取日线，返回 {code: [kline, ...]}。"""
+        codes = [str(c).strip() for c in (codes or []) if str(c).strip()]
+        if not codes:
+            return {}
+        out = {c: [] for c in codes}
+        cursor = kline_collection.find(
+            {'code': {'$in': codes}, 'period': period},
+            {'_id': 0},
+        ).sort([('code', 1), ('date', 1)])
+        for doc in cursor:
+            c = doc.get('code')
+            if c in out:
+                out[c].append(doc)
+        return out
+
+    @staticmethod
     def get(code, start_date=None, end_date=None, period='day', after_exclusive=None):
         query = {'code': code, 'period': period}
         ae = str(after_exclusive).strip() if after_exclusive else ''

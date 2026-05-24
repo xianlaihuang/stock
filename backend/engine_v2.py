@@ -4,6 +4,8 @@ import talib
 from scipy import stats
 import warnings
 import importlib
+import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import dynamic_weight_engine as dwe
 from db import db
 from datetime import datetime
@@ -194,19 +196,65 @@ def _klines_to_df(klines):
     return df
 
 
-def _precompute_rule_signals(df, rules, start_offset=60):
+def _rule_precompute_workers(n_rules):
+    """批量并行跑池时避免嵌套线程过载；单股分析时并行预计算各规则。"""
+    n_rules = max(1, int(n_rules or 1))
+    try:
+        w = int(os.environ.get('RULE_PRECOMPUTE_WORKERS', '0'))
+    except (TypeError, ValueError):
+        w = 0
+    if w > 0:
+        return min(w, n_rules)
+    if os.environ.get('POOL_BATCH_ACTIVE'):
+        return 1
+    return min(n_rules, 8)
+
+
+def _precompute_one_rule(df, start_offset, n, name_func):
+    name, func = name_func
+    arr = np.zeros(n, dtype=np.bool_)
+    for idx in range(start_offset, n):
+        try:
+            if func(df, idx):
+                arr[idx] = True
+        except Exception:
+            pass
+    return name, arr
+
+
+def _precompute_rule_signals(df, rules, start_offset=60, max_workers=None):
     n = len(df)
+    if not rules:
+        return {}
+    items = list(rules.items())
+    if max_workers is None:
+        max_workers = _rule_precompute_workers(len(items))
+    if max_workers <= 1 or len(items) <= 1:
+        signals = {}
+        for name, func in items:
+            _, arr = _precompute_one_rule(df, start_offset, n, (name, func))
+            signals[name] = arr
+        return signals
     signals = {}
-    for name, func in rules.items():
-        arr = np.zeros(n, dtype=np.bool_)
-        for idx in range(start_offset, n):
-            try:
-                if func(df, idx):
-                    arr[idx] = True
-            except Exception:
-                pass
-        signals[name] = arr
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [
+            executor.submit(_precompute_one_rule, df, start_offset, n, item)
+            for item in items
+        ]
+        for fut in as_completed(futures):
+            name, arr = fut.result()
+            signals[name] = arr
     return signals
+
+
+def _clone_precomputed_signals(precomputed):
+    """深拷贝规则布尔序列，避免 V2/V3 共用预计算时被 _mark_bs_points 内过滤器改写。"""
+    if not precomputed:
+        return None
+    return {
+        key: {name: arr.copy() for name, arr in group.items()}
+        for key, group in precomputed.items()
+    }
 
 
 def _preprocess_data(df):
@@ -1091,16 +1139,20 @@ def _calculate_total_return(signals, close, open_=None):
 # 主入口：公式生成
 # ============================================================
 
-def calculate_weights_v2(df, max_iterations=100):
+def calculate_weights_v2(df, max_iterations=100, quiet=False):
     buy_rules, sell_rules = dwe.get_all_rules()
     _, _, mandatory_sell_rules, buy_restriction_rules, mandatory_buy_rules = dwe.get_all_rules_extended()
+
+    def _log(msg):
+        if not quiet:
+            print(msg)
 
     start_offset = 60
     close = df['close'].values.astype(float)
     high = df['high'].values.astype(float) if 'high' in df.columns else close
     low = df['low'].values.astype(float) if 'low' in df.columns else close
 
-    print("[V2] 第一大层：计算各买卖指标有效性...")
+    _log("[V2] 第一大层：计算各买卖指标有效性...")
     buy_rewards_l1, sell_rewards_l1 = layer1_calculate_effectiveness(
         df, buy_rules, sell_rules, start_offset)
 
@@ -1136,7 +1188,7 @@ def calculate_weights_v2(df, max_iterations=100):
     prev_return = -np.inf
     converge_count = 0
 
-    print("[V2] 第二大层：迭代优化（PRD：执行价+效用U+分组cap+ATR/时间止损+波动门控）...")
+    _log("[V2] 第二大层：迭代优化（PRD：执行价+效用U+分组cap+ATR/时间止损+波动门控）...")
     for iteration in range(1, max_iterations + 1):
         U = -np.inf
         signals, reasons_list = _mark_bs_points(
@@ -1148,7 +1200,7 @@ def calculate_weights_v2(df, max_iterations=100):
             high_vol_mask=hvm)
 
         if not signals:
-            print(f"  迭代{iteration}: 无信号生成，跳过")
+            _log(f"  迭代{iteration}: 无信号生成，跳过")
             continue
 
         b_rewards, b_penalties = _verify_buy_effectiveness(
@@ -1194,7 +1246,7 @@ def calculate_weights_v2(df, max_iterations=100):
 
         if iteration % 10 == 0:
             ex = f", U={U:.4f}" if V2_PRD_UTILITY_OBJECTIVE else ''
-            print(f"  迭代{iteration}: sum收益={total_return*100:.2f}%, 胜率={win_rate*100:.1f}%{ex}")
+            _log(f"  迭代{iteration}: sum收益={total_return*100:.2f}%, 胜率={win_rate*100:.1f}%{ex}")
 
         if abs(total_return - prev_return) < 0.001:
             converge_count += 1
@@ -1203,14 +1255,14 @@ def calculate_weights_v2(df, max_iterations=100):
         prev_return = total_return
 
         if converge_count >= 3:
-            print(f"  迭代{iteration}: 收敛，停止迭代")
+            _log(f"  迭代{iteration}: 收敛，停止迭代")
             break
 
     suf = ''
     if V2_PRD_UTILITY_OBJECTIVE and best_utility_components:
         suf = f", U={best_utility_components['U']:.4f}, MDD={best_utility_components['mdd']:.3f}"
-    print(f"[V2] 优化完成: 最佳迭代={best_iteration}, sum收益={best_return*100:.2f}%, "
-          f"胜率={best_win_rate*100:.1f}%{suf}")
+    _log(f"[V2] 优化完成: 最佳迭代={best_iteration}, sum收益={best_return*100:.2f}%, "
+         f"胜率={best_win_rate*100:.1f}%{suf}")
 
     out = {
         'buy_weights': best_buy_weights,
@@ -1232,7 +1284,8 @@ def calculate_weights_v2(df, max_iterations=100):
 # ============================================================
 
 def analyze_signals_v2(df, precomputed_weights=None, start_date=None, end_date=None,
-                       engine_mode='v2', mandatory_buy_rules_override=None):
+                       engine_mode='v2', mandatory_buy_rules_override=None,
+                       precomputed_signals=None, atr_arr=None, high_vol_mask=None):
     buy_rules, sell_rules = dwe.get_all_rules()
     _, _, mandatory_sell_rules, buy_restriction_rules, mandatory_buy_rules = dwe.get_all_rules_extended()
     if mandatory_buy_rules_override is not None:
@@ -1253,23 +1306,26 @@ def analyze_signals_v2(df, precomputed_weights=None, start_date=None, end_date=N
     n = len(close)
 
     start_offset = 60
-    atr_arr = talib.ATR(high, low, close, timeperiod=V2_ATR_PERIOD) if V2_ATR_STOP_ON else None
-    hvm = _precompute_high_vol_mask(close, high, low, start_offset)
-    precomputed = {
-        'buy': _precompute_rule_signals(df, buy_rules, start_offset),
-        'sell': _precompute_rule_signals(df, sell_rules, start_offset),
-        'mandatory_buy': _precompute_rule_signals(df, mandatory_buy_rules, start_offset),
-        'mandatory_sell': _precompute_rule_signals(df, mandatory_sell_rules, start_offset),
-        'restriction': _precompute_rule_signals(df, buy_restriction_rules, start_offset),
-    }
+    if atr_arr is None:
+        atr_arr = talib.ATR(high, low, close, timeperiod=V2_ATR_PERIOD) if V2_ATR_STOP_ON else None
+    if high_vol_mask is None:
+        high_vol_mask = _precompute_high_vol_mask(close, high, low, start_offset)
+    if precomputed_signals is None:
+        precomputed_signals = {
+            'buy': _precompute_rule_signals(df, buy_rules, start_offset),
+            'sell': _precompute_rule_signals(df, sell_rules, start_offset),
+            'mandatory_buy': _precompute_rule_signals(df, mandatory_buy_rules, start_offset),
+            'mandatory_sell': _precompute_rule_signals(df, mandatory_sell_rules, start_offset),
+            'restriction': _precompute_rule_signals(df, buy_restriction_rules, start_offset),
+        }
 
     signals, reasons_list = _mark_bs_points(
         df, buy_rules, sell_rules,
         mandatory_buy_rules, mandatory_sell_rules, buy_restriction_rules,
         buy_weights, sell_weights, start_offset,
-        precomputed_signals=precomputed,
+        precomputed_signals=precomputed_signals,
         atr_arr=atr_arr,
-        high_vol_mask=hvm,
+        high_vol_mask=high_vol_mask,
         engine_mode=engine_mode)
 
     paired_signals = []
@@ -1406,15 +1462,67 @@ def analyze_signals_v2(df, precomputed_weights=None, start_date=None, end_date=N
     }
 
 
-def analyze_signals_dual(df, precomputed_weights=None, start_date=None, end_date=None):
-    from v4_aggressive.engine import analyze_signals_v4_aggressive
+def analyze_signals_dual(df, precomputed_weights=None, start_date=None, end_date=None, lite=False):
+    from v4_aggressive.engine import (
+        analyze_signals_v4_aggressive,
+        _mandatory_buy_rules_v4,
+        patch_v4_precomputed_signals,
+    )
 
     start_offset = 60
-    mb_v3 = _mandatory_buy_rules_v3(df, start_offset)
-    r2 = analyze_signals_v2(df, precomputed_weights, start_date, end_date, engine_mode='v2')
-    r3 = analyze_signals_v2(df, precomputed_weights, start_date, end_date,
-                            engine_mode='v3', mandatory_buy_rules_override=mb_v3)
-    r4 = analyze_signals_v4_aggressive(df, precomputed_weights, start_date, end_date)
+    buy_rules, sell_rules = dwe.get_all_rules()
+    _, _, mandatory_sell_rules, buy_restriction_rules, mandatory_buy_v2 = (
+        dwe.get_all_rules_extended()
+    )
+    mandatory_buy_v3 = _mandatory_buy_rules_v3(df, start_offset)
+    mandatory_buy_v4 = _mandatory_buy_rules_v4(df, start_offset)
+
+    close = df['close'].values.astype(float)
+    high = df['high'].values.astype(float) if 'high' in df.columns else close
+    low = df['low'].values.astype(float) if 'low' in df.columns else close
+    atr_arr = talib.ATR(high, low, close, timeperiod=V2_ATR_PERIOD) if V2_ATR_STOP_ON else None
+    hvm = _precompute_high_vol_mask(close, high, low, start_offset)
+
+    shared = {
+        'buy': _precompute_rule_signals(df, buy_rules, start_offset),
+        'sell': _precompute_rule_signals(df, sell_rules, start_offset),
+        'mandatory_sell': _precompute_rule_signals(df, mandatory_sell_rules, start_offset),
+        'restriction': _precompute_rule_signals(df, buy_restriction_rules, start_offset),
+    }
+    pre_v2 = dict(shared)
+    pre_v2['mandatory_buy'] = _precompute_rule_signals(
+        df, mandatory_buy_v2, start_offset,
+    )
+    pre_v3 = dict(shared)
+    pre_v3['mandatory_buy'] = _precompute_rule_signals(
+        df, mandatory_buy_v3, start_offset,
+    )
+    pre_v4_base = dict(shared)
+    pre_v4_base['mandatory_buy'] = _precompute_rule_signals(
+        df, mandatory_buy_v4, start_offset,
+    )
+    pre_v4 = patch_v4_precomputed_signals(
+        df, pre_v4_base, start_offset, sell_rules, mandatory_sell_rules,
+    )
+
+    r2 = analyze_signals_v2(
+        df, precomputed_weights, start_date, end_date, engine_mode='v2',
+        precomputed_signals=_clone_precomputed_signals(pre_v2),
+        atr_arr=atr_arr, high_vol_mask=hvm,
+    )
+    r3 = analyze_signals_v2(
+        df, precomputed_weights, start_date, end_date,
+        engine_mode='v3', mandatory_buy_rules_override=mandatory_buy_v3,
+        precomputed_signals=_clone_precomputed_signals(pre_v3),
+        atr_arr=atr_arr, high_vol_mask=hvm,
+    )
+    r4 = analyze_signals_v4_aggressive(
+        df, precomputed_weights, start_date, end_date,
+        mandatory_buy_rules_override=mandatory_buy_v4,
+        precomputed_signals=_clone_precomputed_signals(pre_v4),
+        atr_arr=atr_arr, high_vol_mask=hvm,
+        lite=lite,
+    )
     r2['portfolio_sim'] = _portfolio_sim_from_paired(r2['paired_signals'])
     r3['portfolio_sim'] = _portfolio_sim_from_paired(r3['paired_signals'])
     r4['portfolio_sim'] = _portfolio_sim_from_paired(r4['paired_signals'])
@@ -1484,6 +1592,16 @@ def save_weights(stock_code, result):
 
 def load_weights(stock_code):
     return weights_v2_collection.find_one({'stock_code': stock_code}, {'_id': 0})
+
+
+def load_weights_many(stock_codes):
+    codes = [str(c).strip() for c in (stock_codes or []) if str(c).strip()]
+    if not codes:
+        return {}
+    cursor = weights_v2_collection.find(
+        {'stock_code': {'$in': codes}}, {'_id': 0},
+    )
+    return {d['stock_code']: d for d in cursor}
 
 
 def delete_weights(stock_code):

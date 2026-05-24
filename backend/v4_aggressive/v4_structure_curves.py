@@ -45,6 +45,9 @@ V_TOP_DROP_MIN = 0.03
 V_TOP_BREAK_RATIO = 0.98
 V_TOP_RIGHT_SCAN = 60
 V_TOP_EVENT_MIN_GAP = 5
+# 峰仍在大 V 右侧且未触瓶口时，不判局部 V反顶
+V_TOP_MACRO_V_LOOKBACK = 120
+V_TOP_NECK_TOUCH_RATIO = 0.98
 
 # 头肩顶：high 曲线 ATR 摆动高点，隔 1 个摆动取左肩/头/右肩（与旧 close 隔 2 峰同构）
 HS_SHOULDER_HEAD_MIN_GAP = 10
@@ -218,7 +221,7 @@ class V4StructureRegistry:
         self.v_top_break_bars: set = set()
         self.hs_break_bars: set = set()
         self._build_v_patterns()
-        self._build_w_patterns()
+        # V4 不算 W 结构，跳过 _build_w_patterns
         self._build_m_patterns()
         self._build_v_top_patterns()
         self._build_hs_top_patterns()
@@ -303,6 +306,33 @@ class V4StructureRegistry:
         if at_bar > p.bottom_idx and float(l[at_bar]) < p.bottom_price * 0.995:
             return False
         return True
+
+    def _peak_on_macro_v_right_leg(self, peak_idx: int) -> bool:
+        """
+        峰是否仍落在大 V 的右侧上升段（未触瓶口）。
+        此类局部摆动高不算独立 V反顶，避免大 V 右侧正常拉升/洗盘被误卖。
+        """
+        peak_idx = int(peak_idx)
+        h = self.curves.high
+        peak_h = float(h[peak_idx])
+        touch = float(V_TOP_NECK_TOUCH_RATIO)
+        for p in self.v_patterns:
+            if p.parent is not None:
+                continue
+            if p.right_entry_idx is None or p.drop_pct < V_DROP_MIN:
+                continue
+            if p.right_entry_idx > peak_idx:
+                continue
+            if peak_idx - p.bottom_idx > V_TOP_MACRO_V_LOOKBACK:
+                continue
+            if not self._is_active_v(p, peak_idx):
+                continue
+            neck = float(p.neck_price)
+            if neck <= 1e-12:
+                continue
+            if peak_h < neck * touch:
+                return True
+        return False
 
     def outermost_active_v_at(self, bar: int) -> Optional[VPattern]:
         bar = int(bar)
@@ -458,7 +488,9 @@ class V4StructureRegistry:
         self.m_break_bars = break_bars
 
     def _build_v_top_patterns(self):
-        """V 反顶部：摆动高点为峰，左侧均价抬升≥7%，右侧回落≥3% 后跌破峰×98%。"""
+        """V 反顶部：摆动高点为峰，左侧均价抬升≥7%，右侧回落≥3% 后跌破峰×98%。
+        若峰仍在大 V 右侧且 high 未触瓶口（neck×98%），跳过——不算局部 V反顶。
+        """
         c, h, l, avg = self.curves.close, self.curves.high, self.curves.low, self.curves.avg
         n = self.curves.n
         patterns: List[VTopPattern] = []
@@ -467,6 +499,8 @@ class V4StructureRegistry:
         for sw_hi in self.swing_highs:
             pi = sw_hi.idx
             if pi < 10 or pi >= n - 3:
+                continue
+            if self._peak_on_macro_v_right_leg(pi):
                 continue
             prev_l = self._prev_swing_low_before(pi)
             left_start = prev_l.idx if prev_l else max(0, pi - V_MAX_RIGHT_SPAN)
@@ -565,24 +599,8 @@ class V4StructureRegistry:
         self.hs_break_bars = break_bars
 
     def to_w_right_events(self) -> List[dict]:
-        out = []
-        last_e = -10 ** 9
-        for p in self.w_patterns:
-            if p.right_entry_idx is None:
-                continue
-            e = int(p.right_entry_idx)
-            if e - last_e < W_EVENT_MIN_GAP:
-                continue
-            out.append({
-                'kind': 'W',
-                'entry': e,
-                'neck': float(p.neck_price),
-                'stop_ref': float(p.stop_ref),
-                'idx1': int(p.left_bottom_idx),
-                'idx2': int(p.right_bottom_idx),
-            })
-            last_e = e
-        return out
+        """V4 已禁用 W 结构，恒返回空。"""
+        return []
 
     def is_m_top_break_bar(self, idx: int) -> bool:
         return int(idx) in self.m_break_bars
