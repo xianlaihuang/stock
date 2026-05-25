@@ -1526,7 +1526,11 @@ def analyze_signals_dual(df, precomputed_weights=None, start_date=None, end_date
     r2['portfolio_sim'] = _portfolio_sim_from_paired(r2['paired_signals'])
     r3['portfolio_sim'] = _portfolio_sim_from_paired(r3['paired_signals'])
     r4['portfolio_sim'] = _portfolio_sim_from_paired(r4['paired_signals'])
-    return {'v2': r2, 'v3': r3, 'v4': r4}
+    from v5.engine import analyze_signals_v5
+
+    r5 = analyze_signals_v5(df, start_date, end_date)
+    r5['portfolio_sim'] = _portfolio_sim_from_paired(r5['paired_signals'])
+    return {'v2': r2, 'v3': r3, 'v4': r4, 'v5': r5}
 
 
 def get_conditions():
@@ -1621,6 +1625,9 @@ def save_signals(stock_code, signals_data):
         if 'v4' in signals_data and signals_data['v4']:
             doc['signals_v4'] = signals_data['v4']['paired_signals']
             doc['portfolio_v4'] = signals_data['v4'].get('portfolio_sim')
+        if 'v5' in signals_data and signals_data['v5']:
+            doc['signals_v5'] = signals_data['v5']['paired_signals']
+            doc['portfolio_v5'] = signals_data['v5'].get('portfolio_sim')
     else:
         doc = {
             'stock_code': stock_code,

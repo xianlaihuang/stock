@@ -248,6 +248,7 @@
                             <button type="button" class="period-btn active" id="engineTabV2" onclick="switchAnalysisEngine('v2')">V2 谨慎</button>
                             <button type="button" class="period-btn" id="engineTabV3" onclick="switchAnalysisEngine('v3')">V3 进取</button>
                             <button type="button" class="period-btn" id="engineTabV4" onclick="switchAnalysisEngine('v4')" style="display:none;">V4 激进</button>
+                            <button type="button" class="period-btn" id="engineTabV5" onclick="switchAnalysisEngine('v5')" style="display:none;">V5 新规则</button>
                         </div>
                         <details id="engineRulesPanel" class="engine-rules-collapse">
                             <summary id="engineRulesSummary">买入 / 卖出规则说明（点击展开）</summary>
@@ -2045,6 +2046,7 @@
         function getEngineVerLabel(data) {
             const d = data !== undefined && data !== null ? data : lastAnalyzeBundle;
             if (!hasEngineBundle(d)) return 'V2';
+            if (currentEngineTab === 'v5' && d.v5) return 'V5';
             if (currentEngineTab === 'v4' && d.v4) return 'V4';
             if (currentEngineTab === 'v3') return 'V3';
             return 'V2';
@@ -2054,6 +2056,7 @@
             const d = data !== undefined && data !== null ? data : lastAnalyzeBundle;
             if (!d) return null;
             if (hasEngineBundle(d)) {
+                if (currentEngineTab === 'v5' && d.v5) return d.v5;
                 if (currentEngineTab === 'v4' && d.v4) return d.v4;
                 if (currentEngineTab === 'v3') return d.v3;
                 return d.v2;
@@ -2073,12 +2076,18 @@
             const v2b = document.getElementById('engineTabV2');
             const v3b = document.getElementById('engineTabV3');
             const v4b = document.getElementById('engineTabV4');
+            const v5b = document.getElementById('engineTabV5');
             if (v2b) v2b.classList.toggle('active', currentEngineTab === 'v2');
             if (v3b) v3b.classList.toggle('active', currentEngineTab === 'v3');
             if (v4b) {
                 v4b.style.display = (d && d.v4) ? '' : 'none';
                 v4b.classList.toggle('active', currentEngineTab === 'v4');
                 if (currentEngineTab === 'v4' && !d.v4) currentEngineTab = 'v2';
+            }
+            if (v5b) {
+                v5b.style.display = (d && d.v5) ? '' : 'none';
+                v5b.classList.toggle('active', currentEngineTab === 'v5');
+                if (currentEngineTab === 'v5' && !d.v5) currentEngineTab = 'v2';
             }
         }
 
@@ -2125,6 +2134,9 @@
                 });
                 html += '</div>';
             }
+            if (ver === 'V5') {
+                html += '<div style="margin-bottom:8px;color:#888;">V5 为独立新规则体系，当前为骨架版本，买卖逻辑待完善。</div>';
+            }
             sections.forEach(([title, key, color]) => {
                 const items = cond[key] || [];
                 if (!items.length) return;
@@ -2148,8 +2160,9 @@
         }
 
         function switchAnalysisEngine(tab) {
-            if (tab !== 'v2' && tab !== 'v3' && tab !== 'v4') return;
+            if (tab !== 'v2' && tab !== 'v3' && tab !== 'v4' && tab !== 'v5') return;
             if (tab === 'v4' && lastAnalyzeBundle && !lastAnalyzeBundle.v4) return;
+            if (tab === 'v5' && lastAnalyzeBundle && !lastAnalyzeBundle.v5) return;
             currentEngineTab = tab;
             updateEngineTabButtons(lastAnalyzeBundle);
             if (lastAnalyzeBundle) {
@@ -3024,7 +3037,7 @@
         function comparePoolLogs(newer, older) {
             if (!newer || !older || newer.success === false || older.success === false) return null;
             const out = {};
-            ['v2', 'v3', 'v4'].forEach(eng => {
+            ['v2', 'v3', 'v4', 'v5'].forEach(eng => {
                 const n = (newer[eng] || {}).total_return_pct;
                 const o = (older[eng] || {}).total_return_pct;
                 if (n != null && o != null && isFinite(Number(n)) && isFinite(Number(o))) {
@@ -3040,9 +3053,12 @@
             const v2 = log.v2 || {};
             const v3 = log.v3 || {};
             const v4 = log.v4 || {};
+            const v5 = log.v5 || {};
             const ok = log.success !== false;
             let note = '-';
-            if (cmp && cmp.v4_delta_pct != null) {
+            if (cmp && cmp.v5_delta_pct != null) {
+                note = `较上一执行 V5 ${cmp.v5_older_pct}% → ${cmp.v5_newer_pct}%`;
+            } else if (cmp && cmp.v4_delta_pct != null) {
                 note = `较上一执行 V4 ${cmp.v4_older_pct}% → ${cmp.v4_newer_pct}%`;
             } else if (!cmp) {
                 note = '首条或无上一条可对比';
@@ -3054,6 +3070,7 @@
             html += `<td>${formatRetPct(v2.total_return_pct)}</td><td>${formatDeltaPct(cmp && cmp.v2_delta_pct)}</td>`;
             html += `<td>${formatRetPct(v3.total_return_pct)}</td><td>${formatDeltaPct(cmp && cmp.v3_delta_pct)}</td>`;
             html += `<td>${formatRetPct(v4.total_return_pct)}</td><td>${formatDeltaPct(cmp && cmp.v4_delta_pct)}</td>`;
+            html += `<td>${formatRetPct(v5.total_return_pct)}</td><td>${formatDeltaPct(cmp && cmp.v5_delta_pct)}</td>`;
             html += `<td style="font-size:11px;color:#888;white-space:normal;">${note}</td>`;
             html += `<td>${formatRunLogDuration(log.duration_ms)}</td>`;
             html += '</tr>';
@@ -3089,11 +3106,11 @@
                 html += '</summary>';
                 html += '<div class="pool-history-table-wrap"><table class="pool-log-table"><thead><tr>';
                 html += '<th>#</th><th>时间</th><th>触发</th><th>状态</th>';
-                html += '<th>V2</th><th>ΔV2</th><th>V3</th><th>ΔV3</th><th>V4</th><th>ΔV4</th>';
+                html += '<th>V2</th><th>ΔV2</th><th>V3</th><th>ΔV3</th><th>V4</th><th>ΔV4</th><th>V5</th><th>ΔV5</th>';
                 html += '<th>相对上一执行</th><th>耗时</th>';
                 html += '</tr></thead><tbody>';
                 if (!hist.length) {
-                    html += '<tr><td colspan="12" style="text-align:center;color:#666;">暂无运行分析记录</td></tr>';
+                    html += '<tr><td colspan="14" style="text-align:center;color:#666;">暂无运行分析记录</td></tr>';
                 } else {
                     hist.forEach((log, i) => {
                         const older = hist[i + 1];
@@ -3129,9 +3146,12 @@
             let html = `<strong>股票池 ${aggregate.stock_count} 只</strong> · `;
             html += `有分析记录 ${aggregate.with_analyze_log} 只（成功 ${aggregate.with_success_log} 只）`;
             html += ` · 可对比上一执行 ${aggregate.with_compare_pair || 0} 只<br>`;
-            html += `最近一次池均收益：V2 ${fmt(aggregate.avg_v2_return_pct)} · V3 ${fmt(aggregate.avg_v3_return_pct)} · V4 ${fmt(aggregate.avg_v4_return_pct)}<br>`;
-            html += `<strong>相对上一执行池均 Δ：</strong> V2 ${fd(aggregate.avg_v2_delta_pct)} · V3 ${fd(aggregate.avg_v3_delta_pct)} · V4 ${fd(aggregate.avg_v4_delta_pct)}`;
-            if (aggregate.v4_improved_count != null) {
+            html += `最近一次池均收益：V2 ${fmt(aggregate.avg_v2_return_pct)} · V3 ${fmt(aggregate.avg_v3_return_pct)} · V4 ${fmt(aggregate.avg_v4_return_pct)} · V5 ${fmt(aggregate.avg_v5_return_pct)}<br>`;
+            html += `<strong>相对上一执行池均 Δ：</strong> V2 ${fd(aggregate.avg_v2_delta_pct)} · V3 ${fd(aggregate.avg_v3_delta_pct)} · V4 ${fd(aggregate.avg_v4_delta_pct)} · V5 ${fd(aggregate.avg_v5_delta_pct)}`;
+            if (aggregate.v5_improved_count != null) {
+                html += ` &nbsp;|&nbsp; V5 提升 <span class="run-log-ret-pos">${aggregate.v5_improved_count}</span> 只`;
+                html += `、下降 <span class="run-log-ret-neg">${aggregate.v5_worse_count || 0}</span> 只`;
+            } else if (aggregate.v4_improved_count != null) {
                 html += ` &nbsp;|&nbsp; V4 提升 <span class="run-log-ret-pos">${aggregate.v4_improved_count}</span> 只`;
                 html += `、下降 <span class="run-log-ret-neg">${aggregate.v4_worse_count || 0}</span> 只`;
             }
@@ -3180,6 +3200,7 @@
             html += `<th style="cursor:pointer;" onclick="togglePoolSort('v2')">V2收益${sortMark('v2')}</th><th>ΔV2</th>`;
             html += `<th style="cursor:pointer;" onclick="togglePoolSort('v3')">V3收益${sortMark('v3')}</th><th>ΔV3</th>`;
             html += `<th style="cursor:pointer;" onclick="togglePoolSort('v4')">V4收益${sortMark('v4')}</th><th>ΔV4</th>`;
+            html += `<th style="cursor:pointer;" onclick="togglePoolSort('v5')">V5收益${sortMark('v5')}</th><th>ΔV5</th>`;
             html += '<th>上次时间</th><th>耗时</th><th class="pool-actions">操作</th>';
             html += '</tr></thead><tbody>';
             rows.forEach(row => {
@@ -3188,6 +3209,7 @@
                 const v2 = (lat && lat.v2) || {};
                 const v3 = (lat && lat.v3) || {};
                 const v4 = (lat && lat.v4) || {};
+                const v5 = (lat && lat.v5) || {};
                 const ok = lat && lat.success !== false;
                 const code = row.stock_code || '';
                 const name = row.stock_name || '';
@@ -3198,11 +3220,12 @@
                 html += `<td>${lat ? formatRunLogTime(lat.created_at) : '<span style="color:#666;">未分析</span>'}</td>`;
                 html += `<td style="color:${!lat ? '#888' : ok ? '#27ae60' : '#ef5350'}">${!lat ? '—' : ok ? '成功' : '失败'}</td>`;
                 if (!lat || lat.run_type !== 'analyze') {
-                    html += '<td colspan="8" style="text-align:center;color:#666;">—</td>';
+                    html += '<td colspan="10" style="text-align:center;color:#666;">—</td>';
                 } else {
                     html += `<td>${formatRetPct(v2.total_return_pct)}</td><td>${formatDeltaPct(compareDelta(row, 'v2'))}</td>`;
                     html += `<td>${formatRetPct(v3.total_return_pct)}</td><td>${formatDeltaPct(compareDelta(row, 'v3'))}</td>`;
                     html += `<td>${formatRetPct(v4.total_return_pct)}</td><td>${formatDeltaPct(compareDelta(row, 'v4'))}</td>`;
+                    html += `<td>${formatRetPct(v5.total_return_pct)}</td><td>${formatDeltaPct(compareDelta(row, 'v5'))}</td>`;
                     html += `<td>${prev ? formatRunLogTime(prev.created_at) : '-'}</td>`;
                     html += `<td>${lat ? formatRunLogDuration(lat.duration_ms) : '-'}</td>`;
                 }
@@ -3408,11 +3431,13 @@
             const v2 = lat.v2 || {};
             const v3 = lat.v3 || {};
             const v4 = lat.v4 || {};
+            const v5 = lat.v5 || {};
             let html = `<strong>${summary.stock_code}</strong> ${summary.stock_name || ''} · 最近 ${summary.run_count} 次「运行分析」记录<br>`;
             html += `最近一次（${formatRunLogTime(lat.created_at)}）：`;
             html += `V2 收益 ${v2.total_return_pct != null ? v2.total_return_pct + '%' : '-'}，胜率 ${v2.win_rate_pct != null ? v2.win_rate_pct + '%' : '-'}，期末 ${formatMoney(v2.final_equity)}；`;
             html += `V3 收益 ${v3.total_return_pct != null ? v3.total_return_pct + '%' : '-'}，胜率 ${v3.win_rate_pct != null ? v3.win_rate_pct + '%' : '-'}，期末 ${formatMoney(v3.final_equity)}；`;
             html += `V4 收益 ${v4.total_return_pct != null ? v4.total_return_pct + '%' : '-'}，胜率 ${v4.win_rate_pct != null ? v4.win_rate_pct + '%' : '-'}，期末 ${formatMoney(v4.final_equity)}；`;
+            html += `V5 收益 ${v5.total_return_pct != null ? v5.total_return_pct + '%' : '-'}，胜率 ${v5.win_rate_pct != null ? v5.win_rate_pct + '%' : '-'}，期末 ${formatMoney(v5.final_equity)}；`;
             html += `耗时 ${formatRunLogDuration(lat.duration_ms)}`;
             if (prev) {
                 const pv2 = (prev.v2 || {}).total_return_pct;
@@ -3421,6 +3446,8 @@
                 const lv3 = v3.total_return_pct;
                 const pv4 = (prev.v4 || {}).total_return_pct;
                 const lv4 = v4.total_return_pct;
+                const pv5 = (prev.v5 || {}).total_return_pct;
+                const lv5 = v5.total_return_pct;
                 if (pv2 != null && lv2 != null) {
                     const d = (lv2 - pv2).toFixed(2);
                     html += `<br>相对上一运行分析：V2 收益 ${d >= 0 ? '+' : ''}${d}%`;
@@ -3432,6 +3459,10 @@
                 if (pv4 != null && lv4 != null) {
                     const d = (lv4 - pv4).toFixed(2);
                     html += ` · V4 收益 ${d >= 0 ? '+' : ''}${d}%`;
+                }
+                if (pv5 != null && lv5 != null) {
+                    const d = (lv5 - pv5).toFixed(2);
+                    html += ` · V5 收益 ${d >= 0 ? '+' : ''}${d}%`;
                 }
             }
             el.innerHTML = html;
@@ -3453,6 +3484,7 @@
             html += '<th>V2总收益</th><th>V2胜率</th><th>V2期末(100万)</th><th>V2笔数</th>';
             html += '<th>V3总收益</th><th>V3胜率</th><th>V3期末(100万)</th><th>V3笔数</th>';
             html += '<th>V4总收益</th><th>V4胜率</th><th>V4期末(100万)</th><th>V4笔数</th>';
+            html += '<th>V5总收益</th><th>V5胜率</th><th>V5期末(100万)</th><th>V5笔数</th>';
             html += '<th>权重优化收益</th><th>权重胜率</th><th>迭代</th>';
             html += '<th>耗时</th><th>K线深度</th><th>备注</th>';
             html += '</tr></thead><tbody>';
@@ -3460,6 +3492,7 @@
                 const v2 = log.v2 || {};
                 const v3 = log.v3 || {};
                 const v4 = log.v4 || {};
+                const v5 = log.v5 || {};
                 const wo = log.weights_opt || {};
                 const ok = log.success !== false;
                 html += '<tr>';
@@ -3471,7 +3504,7 @@
                 html += `<td>${RUN_LOG_TRIGGER_CN[log.trigger] || log.trigger || '-'}</td>`;
                 html += `<td style="color:${ok ? '#27ae60' : '#ef5350'}">${ok ? '成功' : '失败'}</td>`;
                 if (log.run_type === 'calculate_weights') {
-                    html += '<td colspan="11" style="text-align:center;color:#666;">—</td>';
+                    html += '<td colspan="15" style="text-align:center;color:#666;">—</td>';
                     html += `<td>${formatRetPct(wo.total_return_pct)}</td>`;
                     html += `<td>${wo.win_rate_pct != null ? wo.win_rate_pct + '%' : '-'}</td>`;
                     html += `<td>${wo.iteration_count != null ? wo.iteration_count : '-'}</td>`;
@@ -3488,6 +3521,10 @@
                     html += `<td>${v4.win_rate_pct != null ? v4.win_rate_pct + '%' : '-'}</td>`;
                     html += `<td>${formatMoney(v4.final_equity)}</td>`;
                     html += `<td>${v4.closed_trades != null ? v4.closed_trades : '-'}</td>`;
+                    html += `<td>${formatRetPct(v5.total_return_pct)}</td>`;
+                    html += `<td>${v5.win_rate_pct != null ? v5.win_rate_pct + '%' : '-'}</td>`;
+                    html += `<td>${formatMoney(v5.final_equity)}</td>`;
+                    html += `<td>${v5.closed_trades != null ? v5.closed_trades : '-'}</td>`;
                     html += '<td>—</td><td>—</td><td>—</td>';
                 }
                 html += `<td>${formatRunLogDuration(log.duration_ms)}</td>`;

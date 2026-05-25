@@ -1,4 +1,4 @@
-"""智能分析 V2/V3/V4 运行日志（MongoDB analysis_run_log）。"""
+"""智能分析 V2/V3/V4/V5 运行日志（MongoDB analysis_run_log）。"""
 from datetime import datetime
 
 from db import db, stock_collection
@@ -53,6 +53,7 @@ def save_run_log(
     v2_portfolio=None,
     v3_portfolio=None,
     v4_portfolio=None,
+    v5_portfolio=None,
     depth_used=None,
     weights_opt=None,
     start_date=None,
@@ -70,6 +71,7 @@ def save_run_log(
         'v2': _portfolio_snapshot(v2_portfolio),
         'v3': _portfolio_snapshot(v3_portfolio),
         'v4': _portfolio_snapshot(v4_portfolio),
+        'v5': _portfolio_snapshot(v5_portfolio),
         'depth_used': depth_used,
         'weights_opt': weights_opt or None,
         'start_date': start_date,
@@ -125,7 +127,7 @@ def compare_analyze_logs(newer_log, older_log):
     if newer_log.get('success') is False or older_log.get('success') is False:
         return None
     out = {}
-    for eng in ('v2', 'v3', 'v4'):
+    for eng in ('v2', 'v3', 'v4', 'v5'):
         n = _pct_from_log(newer_log, eng)
         o = _pct_from_log(older_log, eng)
         if n is not None and o is not None:
@@ -216,12 +218,13 @@ def list_latest_analyze_by_codes(stock_codes):
 
 def pool_analyze_aggregate(rows):
     """对 list_pool_dashboard_rows 结果做池级汇总（含相对上一执行的变化统计）。"""
-    v2_rets, v3_rets, v4_rets = [], [], []
-    v2_deltas, v3_deltas, v4_deltas = [], [], []
+    v2_rets, v3_rets, v4_rets, v5_rets = [], [], [], []
+    v2_deltas, v3_deltas, v4_deltas, v5_deltas = [], [], [], []
     with_log = 0
     ok_count = 0
     with_compare = 0
     v4_improved = v4_worse = 0
+    v5_improved = v5_worse = 0
     for row in rows or []:
         lat = row.get('latest')
         if not lat:
@@ -230,7 +233,7 @@ def pool_analyze_aggregate(rows):
         if lat.get('success') is False:
             continue
         ok_count += 1
-        for key, bucket in (('v2', v2_rets), ('v3', v3_rets), ('v4', v4_rets)):
+        for key, bucket in (('v2', v2_rets), ('v3', v3_rets), ('v4', v4_rets), ('v5', v5_rets)):
             v = (lat.get(key) or {}).get('total_return_pct')
             if v is not None:
                 try:
@@ -240,7 +243,7 @@ def pool_analyze_aggregate(rows):
         cmp_ = row.get('compare')
         if cmp_:
             with_compare += 1
-            for eng, dbucket in (('v2', v2_deltas), ('v3', v3_deltas), ('v4', v4_deltas)):
+            for eng, dbucket in (('v2', v2_deltas), ('v3', v3_deltas), ('v4', v4_deltas), ('v5', v5_deltas)):
                 d = cmp_.get(f'{eng}_delta_pct')
                 if d is not None:
                     dbucket.append(float(d))
@@ -250,6 +253,12 @@ def pool_analyze_aggregate(rows):
                     v4_improved += 1
                 elif d4 < 0:
                     v4_worse += 1
+            d5 = cmp_.get('v5_delta_pct')
+            if d5 is not None:
+                if d5 > 0:
+                    v5_improved += 1
+                elif d5 < 0:
+                    v5_worse += 1
 
     def _avg(arr):
         return round(sum(arr) / len(arr), 2) if arr else None
@@ -262,16 +271,20 @@ def pool_analyze_aggregate(rows):
         'avg_v2_return_pct': _avg(v2_rets),
         'avg_v3_return_pct': _avg(v3_rets),
         'avg_v4_return_pct': _avg(v4_rets),
+        'avg_v5_return_pct': _avg(v5_rets),
         'avg_v2_delta_pct': _avg(v2_deltas),
         'avg_v3_delta_pct': _avg(v3_deltas),
         'avg_v4_delta_pct': _avg(v4_deltas),
+        'avg_v5_delta_pct': _avg(v5_deltas),
         'v4_improved_count': v4_improved,
         'v4_worse_count': v4_worse,
+        'v5_improved_count': v5_improved,
+        'v5_worse_count': v5_worse,
     }
 
 
 def stock_run_summary(stock_code, limit=5):
-    """每只股票最近几次运行的 V2/V3/V4 收益摘要，便于对比。"""
+    """每只股票最近几次运行的 V2/V3/V4/V5 收益摘要，便于对比。"""
     logs = list_run_logs(stock_code=stock_code, limit=limit, run_type='analyze')
     if not logs:
         return None

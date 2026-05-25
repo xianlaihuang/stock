@@ -14,6 +14,11 @@ def _v4_get_conditions():
     return get_conditions()
 
 
+def _v5_get_conditions():
+    from v5.rules import get_conditions
+    return get_conditions()
+
+
 def _klines_to_df(klines):
     import pandas as pd
     df = pd.DataFrame(klines)
@@ -200,7 +205,7 @@ def _run_analyze_for_stock(
     stock_code, *, start_date=None, end_date=None, trigger='manual',
     klines=None, cached_weights=None, stock_name=None,
 ):
-    """运行 V2/V3/V4 分析并写日志；返回 (payload_dict, http_status)。"""
+    """运行 V2/V3/V4/V5 分析并写日志；返回 (payload_dict, http_status)。"""
     if klines is None:
         klines = KlineData.get(stock_code, period='day')
     if not klines or len(klines) < 30:
@@ -241,10 +246,12 @@ def _run_analyze_for_stock(
     v2 = dual['v2']
     v3 = dual['v3']
     v4 = dual.get('v4')
+    v5 = dual.get('v5')
     depth = len(df)
     block2 = _engine_block_from_result(v2, depth)
     block3 = _engine_block_from_result(v3, depth)
     block4 = _engine_block_from_result(v4, depth) if v4 else None
+    block5 = _engine_block_from_result(v5, depth) if v5 else None
     duration_ms = int((time.perf_counter() - t0) * 1000)
 
     arl.save_run_log(
@@ -254,6 +261,7 @@ def _run_analyze_for_stock(
         v2_portfolio=block2.get('portfolio_sim'),
         v3_portfolio=block3.get('portfolio_sim'),
         v4_portfolio=block4.get('portfolio_sim') if block4 else None,
+        v5_portfolio=block5.get('portfolio_sim') if block5 else None,
         depth_used=depth, start_date=start_date, end_date=end_date,
         stock_name=stock_name,
     )
@@ -279,10 +287,12 @@ def _run_analyze_for_stock(
         'v2': block2,
         'v3': block3,
         'v4': block4,
+        'v5': block5,
         'duration_ms': duration_ms,
         'v2_return_pct': (block2.get('portfolio_sim') or {}).get('total_return_pct'),
         'v3_return_pct': (block3.get('portfolio_sim') or {}).get('total_return_pct'),
         'v4_return_pct': (block4.get('portfolio_sim') or {}).get('total_return_pct') if block4 else None,
+        'v5_return_pct': (block5.get('portfolio_sim') or {}).get('total_return_pct') if block5 else None,
     }
     return payload, 200
 
@@ -374,8 +384,9 @@ def v2_get_signals():
     sigs = cached.get('signals', [])
     sigs_v3 = cached.get('signals_v3')
     sigs_v4 = cached.get('signals_v4')
+    sigs_v5 = cached.get('signals_v5')
 
-    if (sigs_v3 is None or sigs_v4 is None) and klines and len(klines) >= 30:
+    if (sigs_v3 is None or sigs_v4 is None or sigs_v5 is None) and klines and len(klines) >= 30:
         try:
             df = _klines_to_df(klines)
             cw = ev2.load_weights(stock_code)
@@ -391,18 +402,23 @@ def v2_get_signals():
             sigs = cached.get('signals', sigs)
             sigs_v3 = cached.get('signals_v3')
             sigs_v4 = cached.get('signals_v4')
+            sigs_v5 = cached.get('signals_v5')
         except Exception:
             sigs_v3 = sigs_v3 or []
             sigs_v4 = sigs_v4 or []
+            sigs_v5 = sigs_v5 or []
 
     if sigs_v3 is None:
         sigs_v3 = []
     if sigs_v4 is None:
         sigs_v4 = []
+    if sigs_v5 is None:
+        sigs_v5 = []
 
     port2 = cached.get('portfolio_v2') or ev2._portfolio_sim_from_paired(sigs)
     port3 = cached.get('portfolio_v3') or ev2._portfolio_sim_from_paired(sigs_v3)
     port4 = cached.get('portfolio_v4') or ev2._portfolio_sim_from_paired(sigs_v4)
+    port5 = cached.get('portfolio_v5') or ev2._portfolio_sim_from_paired(sigs_v5)
 
     pseudo_v2 = {
         'paired_signals': sigs,
@@ -448,6 +464,20 @@ def v2_get_signals():
         'rule_stats': {},
     }
     block4 = _engine_block_from_result(pseudo_v4, depth_used)
+    pseudo_v5 = {
+        'paired_signals': sigs_v5,
+        'all_signals': sigs_v5,
+        'prd_metrics': {},
+        'summary': {
+            'total_signals': len(sigs_v5),
+            'buy_count': sum(1 for s in sigs_v5 if s.get('type') == 'B'),
+            'sell_count': sum(1 for s in sigs_v5 if s.get('type') == 'S'),
+        },
+        'portfolio_sim': port5,
+        'conditions': _v5_get_conditions(),
+        'rule_stats': {},
+    }
+    block5 = _engine_block_from_result(pseudo_v5, depth_used)
 
     buy_count = sum(1 for s in sigs if s.get('type') == 'B')
     sell_count = sum(1 for s in sigs if s.get('type') == 'S')
@@ -476,6 +506,8 @@ def v2_get_signals():
     }
     if sigs_v4 is not None:
         payload['v4'] = block4
+    if sigs_v5 is not None:
+        payload['v5'] = block5
     return jsonify(payload)
 
 
@@ -570,6 +602,7 @@ def _pool_run_one_stock(
         row['v2_return_pct'] = apayload.get('v2_return_pct')
         row['v3_return_pct'] = apayload.get('v3_return_pct')
         row['v4_return_pct'] = apayload.get('v4_return_pct')
+        row['v5_return_pct'] = apayload.get('v5_return_pct')
         row['analyze_duration_ms'] = apayload.get('duration_ms')
         row['http_status'] = astatus
         if not row['analyze_ok']:
